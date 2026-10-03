@@ -39,6 +39,16 @@ Demo logins seeded in the API all use the password in `SEED_DEMO_PASSWORD`, for 
 `mira@example.com` (buyer), `rafi@atlas.example` (seller), `sofia.sa-01@staff.example.com`
 (Super Admin), `felix.fin-01@staff.example.com` (Finance Admin).
 
+## Live demo
+
+* Website (GitHub Pages): https://nebsitcentral.github.io/crateline-marketplace/
+* API (Railway, project "Crateline marketplace", service `backend` + Postgres):
+  https://backend-production-2489.up.railway.app/health
+* Pushing to `main` redeploys both: GitHub Actions publishes the website, and Railway rebuilds the
+  `backend` service from the repository root. The website reads the API address from the
+  repository variable `VITE_API_URL`.
+* The demo accounts' password is the `SEED_DEMO_PASSWORD` variable of the Railway `backend` service.
+
 ## Deploy the API to Railway
 
 1. Push this repository to GitHub.
