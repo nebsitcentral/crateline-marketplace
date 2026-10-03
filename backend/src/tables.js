@@ -3,6 +3,10 @@
 // as real columns with foreign keys and indexes. Everything not listed here (settings, roles,
 // categories and other small configuration) stays in the single `app_state` document.
 //
+// group: the collection is an object of lists keyed by an owner id (carts by user, payout methods
+// by store); each list item is a row and the owner id is stored in the `group` column.
+// values: the collection is a list of plain strings (processed provider operations); each string
+// is the row id, so Postgres enforces that an operation is recorded once.
 // order: how the domain keeps the in-memory list. 'newest' lists insert at the front (unshift),
 // 'oldest' lists append (push), 'map' collections are objects keyed by id. Rows carry `ins`, a
 // global insertion number, so the original order is rebuilt exactly when loading.
@@ -36,6 +40,14 @@ export const TABLES = [
   { name: 'staff_notes', key: 'staffNotes', order: 'newest', cols: { staff_id: r => r.staffId, at }, fk: { staff_id: 'staff' } },
   { name: 'tickets', key: 'tickets', order: 'newest', cols: { user_id: r => r.userId ?? null, at }, fk: { user_id: 'users' } },
   { name: 'security_events', key: 'securityEvents', order: 'newest', cols: { at } },
+  { name: 'cart_items', key: 'carts', order: 'oldest', group: 'user_id', cols: { user_id: null }, fk: { user_id: 'users' } },
+  { name: 'payout_methods', key: 'payoutMethods', order: 'oldest', group: 'store_id', cols: { store_id: null }, fk: { store_id: 'stores' } },
+  { name: 'reconciliation_items', key: 'recon', order: 'oldest', cols: { payment_id: r => r.paymentId ?? null, at } },
+  { name: 'tasks', key: 'tasks', order: 'newest', cols: { at } },
+  { name: 'staff_invites', key: 'invites', order: 'newest', cols: { at } },
+  { name: 'exports', key: 'exports', order: 'newest', cols: { at } },
+  { name: 'provider_events', key: 'events', order: 'newest', cols: { at } },
+  { name: 'processed_ops', key: 'processedOps', order: 'oldest', values: true, cols: {} },
 ];
 export const TABLE_KEYS = new Set(TABLES.filter(t => t.key).map(t => t.key));
 const byName = Object.fromEntries(TABLES.map(t => [t.name, t]));
@@ -60,12 +72,15 @@ export function tableMigrations() {
 
 // ---------- document <-> rows
 const recordsOf = (doc, t) => t.order === 'map' ? Object.values(doc[t.key] || {}) : (doc[t.key] || []);
+const groupRows = (doc, t) => Object.entries(doc[t.key] || {}).flatMap(([owner, list]) => (list || []).map(r => ({ id: r.id, cols: { [t.group]: owner }, data: r })));
 // Rows for one table from the document: [{ id, cols, data }]. Child records (messages) are taken
 // from their parent and the parent row is stored without them.
 export function rowsFor(doc, t) {
   if (t.name === 'messages') {
     return (doc.conversations || []).flatMap(c => (c.messages || []).map(m => ({ id: m.id, cols: { conversation_id: c.id, at: m.at ?? null }, data: m })));
   }
+  if (t.group) return groupRows(doc, t);
+  if (t.values) return (doc[t.key] || []).map(v => ({ id: String(v), cols: {}, data: v }));
   return recordsOf(doc, t).map(r => {
     const data = t.child ? (({ [t.child.field]: _, ...rest }) => rest)(r) : r;
     return { id: r.id, cols: Object.fromEntries(Object.entries(t.cols).map(([c, f]) => [c, f(r) ?? null])), data };
@@ -79,6 +94,7 @@ export function assemble(settings, rows) {
   for (const t of TABLES) {
     if (!t.key) continue;
     const list = rows[t.name] || []; const ordered = t.order === 'newest' ? list.slice().reverse() : list;
+    if (t.group) { const g = {}; for (const r of ordered) (g[r.cols[t.group]] = g[r.cols[t.group]] || []).push(r.data); doc[t.key] = g; continue; }
     doc[t.key] = t.order === 'map' ? Object.fromEntries(ordered.map(r => [r.id, r.data])) : ordered.map(r => r.data);
   }
   const msgs = {}; for (const r of rows.messages || []) (msgs[r.cols.conversation_id] = msgs[r.cols.conversation_id] || []).push(r.data);

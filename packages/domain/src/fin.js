@@ -18,7 +18,16 @@ export function fmtMoney(c, cur = 'USD') {
 }
 export const ROUNDING = 'Amounts are stored in cents. Percentages are rounded half up to the nearest cent per order.';
 
-export function nid(d, p) { d.seq[p] = d.seq[p] || 1; return `${p}-${d.seq[p]++}`; }
+// Next id for a prefix. A counter that was never used starts after the highest existing id with
+// that prefix, so records loaded from fixtures or older data are never reused or overwritten.
+export function nid(d, p) { if (!d.seq[p]) d.seq[p] = highestId(d, p) + 1; return `${p}-${d.seq[p]++}`; }
+function highestId(d, p) {
+  let max = 0; const re = new RegExp(`^${p}-(\\d+)$`);
+  for (const v of Object.values(d)) for (const r of Array.isArray(v) ? v : v && typeof v === 'object' ? Object.values(v) : []) {
+    const m = r && typeof r.id === 'string' && r.id.match(re); if (m) max = Math.max(max, +m[1]);
+  }
+  return max;
+}
 export const key = (type, id) => type + ':' + id;
 
 // ---------- settings

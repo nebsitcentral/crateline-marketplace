@@ -71,9 +71,9 @@ class PgStore {
   async loadDoc(c, settings) {
     const rows = {};
     for (const t of TABLES) {
-      const extra = t.name === 'messages' ? ', conversation_id' : '';
+      const extra = t.name === 'messages' ? ', conversation_id' : t.group ? `, ${t.group}` : '';
       const r = await c.query(`select id, data${extra} from ${t.name} order by ins`);
-      rows[t.name] = r.rows.map(x => ({ id: x.id, data: x.data, cols: { conversation_id: x.conversation_id } }));
+      rows[t.name] = r.rows.map(x => ({ id: x.id, data: x.data, cols: { conversation_id: x.conversation_id, ...(t.group ? { [t.group]: x[t.group] } : {}) } }));
     }
     return assemble(settings, rows);
   }
@@ -98,6 +98,8 @@ class PgStore {
       const now = rowsFor(after, t); const seen = new Set();
       const added = [];
       for (const r of now) {
+        // A repeated id would be saved once while the cached document kept both; refuse instead.
+        if (seen.has(r.id)) throw new Error(`Duplicate record ${r.id} in ${t.name}. Nothing was saved.`);
         seen.add(r.id); const prev = old.get(r.id);
         if (prev === undefined) { added.push(r); continue; }
         if (prev === JSON.stringify(r.data) + JSON.stringify(r.cols)) continue;
@@ -167,19 +169,22 @@ class PgStore {
   async markEmailSent(id, providerId, at) { await this.pool.query("update email_outbox set status = 'sent', provider_id = $2, sent_at = $3, locked_at = null where id = $1", [id, providerId, at]); }
   async markEmailFailed(id, attempts, nextAt, error) { await this.pool.query('update email_outbox set status = $2, attempts = $3, next_attempt_at = $4, last_error = $5, locked_at = null where id = $1', [id, nextAt ? 'pending' : 'failed', attempts, nextAt || 0, error]); }
 
-  // Databases created before the tables existed hold every collection inside app_state.doc.
-  // Move those collections into their tables once, in one transaction.
+  // Older databases keep some collections inside app_state.doc (all of them before tables existed;
+  // carts, payout methods and a few lists before they got tables). Move only the collections found
+  // in the document into their tables, once, in one transaction; tables not in it are untouched.
   async splitLegacyDocument() {
     const c = await this.pool.connect();
     try {
       await c.query('begin');
       const r = await c.query('select doc, version from app_state where id = 1 for update');
       const doc = r.rows[0]?.doc;
-      if (!doc || !Object.keys(doc).some(k => TABLE_KEYS.has(k))) { await c.query('rollback'); return false; }
-      await this.writeAll(c, doc);
+      const moving = doc ? TABLES.filter(t => t.key ? t.key in doc : 'conversations' in doc) : [];
+      if (!moving.length) { await c.query('rollback'); return false; }
+      for (const t of moving.slice().reverse()) await c.query(`delete from ${t.name}`);
+      for (const t of moving) await this.insertRows(c, t, insertOrder(t, rowsFor(doc, t)));
       await c.query('update app_state set doc = $1, version = version + 1, updated_at = now() where id = 1', [settingsOf(doc)]);
       await c.query('commit'); this.cache = null;
-      console.log('Moved marketplace collections from app_state into their own tables.');
+      console.log('Moved into their own tables: ' + moving.map(t => t.name).join(', ') + '.');
       return true;
     } catch (e) { await c.query('rollback'); throw e; } finally { c.release(); }
   }

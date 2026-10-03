@@ -113,9 +113,12 @@ Super Admins time travel, provider outcomes (`/api/demo/scenario`) and reset whi
    tables with foreign keys (checked at commit) and indexes; `app_state` keeps settings and small
    configuration only. Old single-document databases are split automatically on start.
    `/api/state` caps audit, notifications and staff notifications; older entries come from
-   `GET /api/list/:resource?after=<id>`. Still to do: carts, payout methods, reconciliation items,
-   tasks and invites are in the document; each write locks one row and loads the (cached) document;
-   reads are built from that document rather than per-table queries.
+   `GET /api/list/:resource?after=<id>`. Carts and payout methods (grouped by owner),
+   reconciliation items, tasks, invites, exports, provider events and processed provider
+   operations (`processed_ops`, one row per operation) have tables too; the start-up split moves
+   only collections still found in the document. A transaction that repeats a record id is refused.
+   Still to do: each write locks one row and loads the (cached) document, and reads are built from
+   that document rather than per-table queries.
 2. Real email. **Done:** Brevo (`backend/src/email.js`). Emails are queued in `email_outbox` in the
    same transaction as the change that causes them and sent by a worker (every 15 s, plus right
    after a request) with backoff retries; Postgres claims rows with `FOR UPDATE SKIP LOCKED`.

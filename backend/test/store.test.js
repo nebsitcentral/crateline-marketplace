@@ -67,3 +67,24 @@ test('removed records are deleted from their table', { skip }, async () => {
   await s.transact(d => { d.listings = d.listings.filter(l => l.id !== 'l_tmp'); });
   assert.equal((await db.query("select count(*) from listings where id = 'l_tmp'")).rows[0].count, '0');
 });
+
+test('a database with some lists still in the document moves only those lists', { skip }, async () => {
+  const s = await open(); await s.replace(seed(), []);
+  const orders = (await db.query('select count(*) from orders')).rows[0].count;
+  // Simulate a database from before carts and processed operations had tables.
+  await db.query('delete from cart_items'); await db.query('delete from processed_ops');
+  await db.query(`update app_state set doc = doc || $1::jsonb where id = 1`, [JSON.stringify({ carts: { u_mira: [{ id: 'ci-old', listingId: 'l_vps', pkgId: 'pk11', count: 2 }] }, processedOps: ['OP-OLD-1'] })]);
+  const fresh = await open(); const { doc } = await fresh.read();
+  assert.deepEqual(doc.carts.u_mira.map(c => c.id), ['ci-old']); assert.deepEqual(doc.processedOps, ['OP-OLD-1']);
+  assert.equal((await db.query('select count(*) from orders')).rows[0].count, orders); // other tables untouched
+  const settings = (await db.query('select doc from app_state where id = 1')).rows[0].doc;
+  assert.equal(settings.carts, undefined); assert.equal(settings.processedOps, undefined);
+});
+
+test('a provider operation can be recorded only once', { skip }, async () => {
+  const s = await open(); await s.replace(seed(), []);
+  await s.transact(d => { d.processedOps.push('OP-ONCE'); });
+  await assert.rejects(s.transact(d => { d.processedOps.push('OP-ONCE'); }), /Duplicate record OP-ONCE/);
+  assert.deepEqual((await (await open()).read()).doc.processedOps.filter(x => x === 'OP-ONCE'), ['OP-ONCE']);
+  assert.equal((await db.query("select count(*) from processed_ops where id = 'OP-ONCE'")).rows[0].count, '1');
+});

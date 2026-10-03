@@ -57,3 +57,11 @@ test('Finance cannot approve above its limit', () => {
   assert.throws(() => decideApproval(d, S(d, 'FIN-01'), apr.id, 'approve', 'ok'), /above your/);
   decideApproval(d, S(d, 'SA-01'), apr.id, 'approve', 'Super Admin approval');
 });
+
+test('new ids never reuse an id that already exists (counter starts after the highest)', async () => {
+  const { nid } = await import('@crateline/domain/fin.js');
+  const d = fresh();
+  assert.ok(d.securityEvents.some(e => e.id === 'SE-3')); assert.equal(d.seq.SE, undefined);
+  assert.equal(nid(d, 'SE'), 'SE-4'); assert.equal(nid(d, 'SE'), 'SE-5');
+  assert.equal(nid(d, 'NEWPREFIX'), 'NEWPREFIX-1');
+});
