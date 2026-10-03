@@ -18,7 +18,7 @@ export function Home() {
   const fresh = [...pub].sort((a, b) => b.createdAt - a.createdAt).slice(0, 4);
   const banners = db.content.banners.filter(b => b.state === 'Active' && b.start <= now() && b.end >= now()).sort((a, b) => a.order - b.order);
   return <>
-    <section className="hero"><div className="wrap hero-grid">
+    <section className="hero"><div className="wrap"><div className="hero-grid">
       <div className="hero-copy">
         <span className="eyebrow">Digital products and services marketplace</span>
         <h1>Data, infrastructure and outreach services from verified sellers</h1>
@@ -31,7 +31,7 @@ export function Home() {
           <ProductArt sub={l.sub} art={l.art} size="thumb" /><div><b>{l.title}</b><span className="muted xs">{st.name} · from {money(startPrice(l))}</span></div></button>; })}
         <div className="hb-stat"><b>{fmtN(db.orders.length + 9411)}</b><span className="xs">orders delivered through Crateline (sample)</span></div>
       </div>
-    </div></section>
+    </div></div></section>
 
     {banners.length > 0 && <section className="wrap blk banners">{banners.map(b => <button key={b.id} className="banner-pv" style={{ '--h': b.hue }} onClick={() => { const [t, v] = b.link.split(':'); if (t === 'search') nav({ page: 'search', cat: v }); else if (t === 'product') nav({ page: 'product', id: v }); else if (t === 'store') nav({ page: 'store', id: v }); else if (t === 'page') nav({ page: v }); }}><b>{b.title}</b><span className="small">{b.sub}</span></button>)}</section>}
     <section className="wrap blk">

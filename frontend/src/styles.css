@@ -916,3 +916,10 @@ section.card>.notice{margin:0 26px 16px;padding:13px 16px} section.card>.notice:
 .tfa-key{font-size:.95rem;letter-spacing:.06em;padding:8px 12px;align-self:flex-start;user-select:all}
 .recovery-codes{list-style:none;margin:0;padding:14px;display:grid;grid-template-columns:repeat(2,minmax(0,max-content));gap:8px 24px;background:var(--surface-2);border-radius:14px}
 .recovery-codes code{background:none;font-size:.95rem;letter-spacing:.05em}
+
+/* Wider layout on large screens: content grows to 1760px and the side padding scales with the
+   screen, instead of a fixed 1240px column with wide empty margins. */
+.wrap{max-width:1760px;padding-inline:clamp(16px,3vw,48px)}
+.tb-row,.panel-main{max-width:1760px}
+.tb-row{padding-inline:clamp(12px,3vw,48px)}
+.panel-main{padding-inline:clamp(16px,3vw,48px)}
