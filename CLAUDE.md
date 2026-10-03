@@ -126,7 +126,11 @@ Super Admins time travel, provider outcomes (`/api/demo/scenario`) and reset whi
    sessions), email change (confirmed from the new address) and notification emails (verified
    customers with "Also send by email"). Tokens are stored hashed in `auth_tokens`. Without
    `BREVO_API_KEY`, development servers write emails to the API log; production keeps email off.
-   Two-factor sign-in is still not available.
+   Two-factor sign-in is done too (`backend/src/totp.js`, RFC 6238): secrets are encrypted in the
+   `accounts` table (`DATA_ENCRYPTION_KEY`, else derived from `JWT_SECRET`), sign-in returns a
+   5-minute `mfa` ticket that only `/api/auth/mfa` accepts, codes cannot be reused, and recovery
+   codes are stored hashed. Customers set it up in account settings, staff under Sign-in security.
+   Requiring it for staff with money permissions is a business decision not yet made.
 3. File storage for deliveries and evidence (signed URLs; files never public).
 4. Payment providers with verified webhooks feeding the same idempotent `processedOps` logic.
 5. Payout provider and reconciliation jobs. KYC provider for seller verification.

@@ -48,8 +48,12 @@ class MemoryStore {
     for (const m of emails) if (!m.dedupeKey || !this.outbox.some(o => o.dedupeKey === m.dedupeKey)) this.outbox.push({ ...m, id: ++this.seq, status: 'pending', attempts: 0, nextAttemptAt: 0, createdAt: Date.now() });
     return { value, version: this.version };
   }
-  async findAccount(email) { return this.accounts.find(a => a.email === email.toLowerCase()) || null; }
+  async findAccount(email) { const a = this.accounts.find(a => a.email === email.toLowerCase()); return a ? { recoveryHashes: [], ...a } : null; }
   async createAccount(a) { this.accounts.push({ ...a, email: a.email.toLowerCase() }); }
+  // Two-factor fields live on the account, outside the marketplace document.
+  async setMfa(email, patch) { Object.assign(this.accounts.find(a => a.email === email.toLowerCase()), patch); }
+  async useMfaStep(email, step) { const a = this.accounts.find(x => x.email === email.toLowerCase()); if (!a || (a.totpLastStep != null && a.totpLastStep >= step)) return false; a.totpLastStep = step; return true; }
+  async useRecovery(email, hash) { const a = this.accounts.find(x => x.email === email.toLowerCase()); const list = a?.recoveryHashes || []; if (!list.includes(hash)) return false; a.recoveryHashes = list.filter(h => h !== hash); return true; }
   async claimEmails(limit, now) { const batch = this.outbox.filter(m => m.status === 'pending' && m.nextAttemptAt <= now).slice(0, limit); for (const m of batch) m.status = 'sending'; return batch.map(m => ({ ...m })); }
   async markEmailSent(id, providerId, at) { Object.assign(this.outbox.find(m => m.id === id), { status: 'sent', providerId, sentAt: at }); }
   async markEmailFailed(id, attempts, nextAt, error) { Object.assign(this.outbox.find(m => m.id === id), { status: nextAt ? 'pending' : 'failed', attempts, nextAttemptAt: nextAt || 0, lastError: error }); }
@@ -156,7 +160,15 @@ class PgStore {
       return { value, version: next };
     } catch (e) { await c.query('rollback'); throw e; } finally { c.release(); }
   }
-  async findAccount(email) { const r = await this.pool.query('select email, kind, ref_id as "refId", password_hash as hash from accounts where email = $1', [email.toLowerCase()]); return r.rows[0] || null; }
+  async findAccount(email) { const r = await this.pool.query(`select email, kind, ref_id as "refId", password_hash as hash, totp_secret as "totpSecret", totp_pending as "totpPending", totp_last_step as "totpLastStep", recovery_hashes as "recoveryHashes" from accounts where email = $1`, [email.toLowerCase()]); const a = r.rows[0]; return a ? { ...a, totpLastStep: a.totpLastStep == null ? null : Number(a.totpLastStep) } : null; }
+  async setMfa(email, patch) {
+    const cols = { totpSecret: 'totp_secret', totpPending: 'totp_pending', totpLastStep: 'totp_last_step', recoveryHashes: 'recovery_hashes' };
+    const keys = Object.keys(patch).filter(k => cols[k]);
+    await this.pool.query(`update accounts set ${keys.map((k, i) => `${cols[k]} = $${i + 2}`).join(', ')} where email = $1`, [email.toLowerCase(), ...keys.map(k => k === 'recoveryHashes' ? JSON.stringify(patch[k]) : patch[k])]);
+  }
+  // Atomic: the update only succeeds for a step later than the last one used.
+  async useMfaStep(email, step) { const r = await this.pool.query('update accounts set totp_last_step = $2 where email = $1 and (totp_last_step is null or totp_last_step < $2)', [email.toLowerCase(), step]); return r.rowCount === 1; }
+  async useRecovery(email, hash) { const r = await this.pool.query('update accounts set recovery_hashes = recovery_hashes - $2::text where email = $1 and recovery_hashes ? $2::text', [email.toLowerCase(), hash]); return r.rowCount === 1; }
 
   // Outbox. SKIP LOCKED lets several API instances work the queue without sending twice; an email
   // stuck in 'sending' for 10 minutes (a worker stopped mid-send) is picked up again.

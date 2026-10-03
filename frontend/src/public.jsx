@@ -5,6 +5,7 @@ import { money, fmtN, fmtDate, days, listingStats, storeStats, startPrice, minDa
 import { Icon, Btn, Badge, Avatar, Stars, ProductArt, ProductCard, PackageSelector, Modal, Empty, SkeletonGrid, Field, Notice, Sim, useApp, Seg } from './ui.jsx';
 import { SearchBox } from './shell.jsx';
 import { apiEnabled, api } from './api.js';
+import { MfaCodeStep } from './auth.jsx';
 import * as AX from '@crateline/domain/actions.js';
 const { useState, useEffect, useMemo } = React;
 
@@ -326,14 +327,15 @@ export function StaffSignIn() {
 // API mode: staff sign in with their own email and password; the server checks the account is active.
 function StaffSignInForm() {
   const { apiSignIn } = useApp();
-  const [email, setEmail] = useState(''); const [pw, setPw] = useState(''); const [err, setErr] = useState(''); const [busy, setBusy] = useState(false);
+  const [email, setEmail] = useState(''); const [pw, setPw] = useState(''); const [err, setErr] = useState(''); const [busy, setBusy] = useState(false); const [ticket, setTicket] = useState(null);
   async function submit(e) {
     e.preventDefault();
     if (!email.trim() || !pw) return setErr('Enter your staff email and password.');
     setBusy(true); setErr('');
-    try { await apiSignIn(() => api.staffLogin(email.trim(), pw)); }
+    try { const r = await apiSignIn(() => api.staffLogin(email.trim(), pw)); if (r?.mfa) { setBusy(false); setTicket(r.ticket); } }
     catch (x) { setBusy(false); setErr(x.status === 401 ? 'Email or password is incorrect. Check the details and try again.' : x.message); }
   }
+  if (ticket) return <div className="wrap page narrow"><h1>Enter your sign-in code</h1><div className="card pad"><MfaCodeStep ticket={ticket} onBack={m => { setTicket(null); setPw(''); setErr(m || ''); }} /></div></div>;
   return <div className="wrap page narrow"><h1>Staff sign-in</h1>
     <p className="muted">Admin and Super Admin panels for marketplace staff. Customers sign in from the main sign-in page.</p>
     <form className="card pad" onSubmit={submit} noValidate>

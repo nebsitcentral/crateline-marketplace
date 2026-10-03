@@ -56,6 +56,9 @@ Demo logins seeded in the API all use the password in `SEED_DEMO_PASSWORD`, for 
      or domain verified in Brevo), optional `EMAIL_FROM_NAME`, and `APP_URL` = the website address
      used in email links, e.g. `https://yourname.github.io/<repo-name>`. Without a key, production
      keeps verification, password reset and email change switched off.
+   * `DATA_ENCRYPTION_KEY` = a long random string that encrypts two-factor secrets. Keep it
+     stable: changing it breaks existing two-factor set-ups. If unset, one is derived from
+     `JWT_SECRET`, so rotating `JWT_SECRET` would have the same effect.
 5. **Settings → Networking → Generate Domain**. Check `https://<your-domain>/health`.
 
 On first start the API creates its tables and loads the demo fixtures.

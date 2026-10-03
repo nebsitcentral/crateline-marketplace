@@ -177,8 +177,10 @@ function App() {
 
   // API sign-in: `login` calls api.login, api.staffLogin or api.register with the form values.
   // Errors are thrown back to the form so it can show them in place.
+  // If the account uses two-factor sign-in, login() returns { mfa, ticket }: hand it back to the
+  // form, which asks for the code and calls apiSignIn again with api.mfa.
   const apiSignIn = async login => {
-    await login();
+    const first = await login(); if (first?.mfa) return first;
     let r; try { r = await loadState(); } catch (e) { api.logout(); throw e; }
     if (r.kind === 'user') { signIn(r.view.me.id); return; }
     const d = dbRef.current; const s = d.staff[r.view.me.id]; setIntent(null);

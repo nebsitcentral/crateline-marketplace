@@ -6,6 +6,8 @@ import { fmtMoney, can, roleOf, isSuper, assignment, setAssignee, key, audit, ni
 import { fmtDT, fmtDate, rel, tzName, STATUS_LABEL, STATUS_TONE, openCase } from '@crateline/domain/logic.js';
 import { Icon, Btn, Badge, Avatar, Modal, Field, Notice, Empty, ErrorState, Table, KV, Section, Sim, Timeline, useApp } from './ui.jsx';
 import { Logo, TopNav } from './shell.jsx';
+import { TwoFactorPanel } from './shared.jsx';
+import { apiEnabled, api } from './api.js';
 const { useState, useEffect, useRef, useMemo } = React;
 
 // ---------- routes and navigation (the same map drives sidebar, direct navigation and breadcrumbs)
@@ -74,7 +76,7 @@ function NotesDrawer({ onClose }) {
 }
 
 export function AdminShell({ children }) {
-  const { db, staff, route, nav, update, toast, openPreview, perform, signOut } = useApp(); const [drawer, setDrawer] = useState(false); const [notes, setNotes] = useState(false); const [pm, setPm] = useState(false);
+  const { db, staff, route, nav, update, toast, openPreview, perform, signOut } = useApp(); const [drawer, setDrawer] = useState(false); const [notes, setNotes] = useState(false); const [pm, setPm] = useState(false); const [security, setSecurity] = useState(false);
   const role = roleOf(db, staff); const sup = isSuper(db, staff);
   const cur = ROUTES[route.page]; const active = cur?.[3] || route.page;
   const unread = db.staffNotes.filter(n => n.staffId === staff.id && !n.read).length;
@@ -108,7 +110,7 @@ export function AdminShell({ children }) {
         <div className="menu-wrap"><button className="profile-btn" aria-expanded={pm} onClick={() => setPm(!pm)} aria-label="Staff profile"><Avatar name={staff.name} hue={(staff.id.charCodeAt(0) * 41) % 360} size={30} /><Icon n="down" s={14} /></button>
           {pm && <div className="dropdown" role="menu"><div className="dd-user"><Avatar name={staff.name} hue={(staff.id.charCodeAt(0) * 41) % 360} size={38} /><div><b>{staff.name}</b><span className="muted xs block">{staff.id} · {staff.email}</span><span className="xs">{role.name}</span></div></div>
             {staff.roles.length > 1 && <><span className="xs muted pad-s">Active role (same account)</span>{staff.roles.map(r => <button key={r} role="menuitem" className={r === staff.activeRole ? 'accent' : ''} onClick={() => { setPm(false); perform('switchRole', { role: r }, d => switchRole(d, d.staff[staff.id], r), 'Active role: ' + db.roles[r].name).then(x => x.ok && nav({ page: homeFor({ ...db, staff: { ...db.staff } }, { ...staff, activeRole: r }) })); }}><Icon n="swap" s={16} />{db.roles[r].name}</button>)}</>}
-            <button role="menuitem" onClick={() => { setPm(false); nav({ page: 'home' }); }}><Icon n="home" s={16} />View marketplace</button><button role="menuitem" onClick={() => { setPm(false); signOut(); }}><Icon n="logout" s={16} />Log out</button></div>}</div>
+            <button role="menuitem" onClick={() => { setPm(false); nav({ page: 'home' }); }}><Icon n="home" s={16} />View marketplace</button>{apiEnabled && <button role="menuitem" onClick={() => { setPm(false); setSecurity(true); }}><Icon n="lock" s={16} />Sign-in security</button>}<button role="menuitem" onClick={() => { setPm(false); signOut(); }}><Icon n="logout" s={16} />Log out</button></div>}</div>
       </nav>
     </div></header>
     <div className="panel-body">
@@ -116,7 +118,27 @@ export function AdminShell({ children }) {
     </div>
     {drawer && <div className="drawer-bg" onClick={() => setDrawer(false)}><aside className="drawer" onClick={e => e.stopPropagation()}><div className="drawer-h"><Logo onClick={() => nav({ page: homeFor(db, staff) })} /><button className="iconbtn" aria-label="Close navigation" onClick={() => setDrawer(false)}><Icon n="x" /></button></div><GlobalSearch />{side}</aside></div>}
     {notes && <NotesDrawer onClose={() => setNotes(false)} />}
+    {security && <StaffSecurity onClose={() => setSecurity(false)} />}
   </div>;
+}
+
+// API mode: a staff member's own sign-in settings (password and two-factor sign-in).
+function StaffSecurity({ onClose }) {
+  const { staff, refresh, toast } = useApp(); const [pw, setPw] = useState({ cur: '', a: '', b: '' }); const [err, setErr] = useState('');
+  async function changePassword() {
+    if (!pw.cur) return setErr('Enter your current password.'); if (pw.a.length < 8 || !/\d/.test(pw.a)) return setErr('New password needs 8 characters including a number.'); if (pw.a !== pw.b) return setErr('New passwords do not match.');
+    setErr(''); try { await api.changePassword(pw.cur, pw.a); setPw({ cur: '', a: '', b: '' }); toast('Password changed. Other sessions were signed out'); } catch (x) { setErr(x.message); }
+  }
+  return <Modal wide title="Sign-in security" onClose={onClose}>
+    <h3 className="sub-h" style={{ marginTop: 0 }}>Two-factor sign-in <Badge tone={staff.twoFA ? 'ok' : 'muted'}>{staff.twoFA ? 'On' : 'Off'}</Badge></h3>
+    <TwoFactorPanel on={staff.twoFA} onChanged={refresh} />
+    <h3 className="sub-h">Password</h3>
+    <div className="form-grid"><Field label="Current password"><input type="password" autoComplete="current-password" value={pw.cur} onChange={e => setPw({ ...pw, cur: e.target.value })} /></Field><span />
+      <Field label="New password" hint="At least 8 characters including a number"><input type="password" autoComplete="new-password" value={pw.a} onChange={e => setPw({ ...pw, a: e.target.value })} /></Field>
+      <Field label="Confirm new password"><input type="password" autoComplete="new-password" value={pw.b} onChange={e => setPw({ ...pw, b: e.target.value })} /></Field></div>
+    {err && <p className="ferr">{err}</p>}
+    <div><Btn onClick={changePassword}>Change password</Btn></div>
+  </Modal>;
 }
 
 export function Denied({ page }) {

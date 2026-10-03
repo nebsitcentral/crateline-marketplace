@@ -911,3 +911,8 @@ section.card>.btn{padding:9px 18px;margin:0 26px 0;align-self:flex-start}
 section.card>.btn:last-child{padding-bottom:9px;margin-bottom:24px}
 section.card>.btn-sm{padding:6px 13px}
 section.card>.notice{margin:0 26px 16px;padding:13px 16px} section.card>.notice:last-child{margin-bottom:24px;padding-bottom:13px}
+/* Two-factor set-up */
+.tfa-qr{border-radius:12px;background:#fff;padding:6px;flex:none}
+.tfa-key{font-size:.95rem;letter-spacing:.06em;padding:8px 12px;align-self:flex-start;user-select:all}
+.recovery-codes{list-style:none;margin:0;padding:14px;display:grid;grid-template-columns:repeat(2,minmax(0,max-content));gap:8px 24px;background:var(--surface-2);border-radius:14px}
+.recovery-codes code{background:none;font-size:.95rem;letter-spacing:.05em}

@@ -18,6 +18,12 @@ export const MIGRATIONS = [
      created_at timestamptz not null default now()
    )`,
   `create index if not exists accounts_ref on accounts (kind, ref_id)`,
+  // Two-factor sign-in: encrypted TOTP secret (and one being set up), the last accepted 30-second
+  // step (codes cannot be reused) and SHA-256 hashes of unused recovery codes.
+  `alter table accounts add column if not exists totp_secret text`,
+  `alter table accounts add column if not exists totp_pending text`,
+  `alter table accounts add column if not exists totp_last_step bigint`,
+  `alter table accounts add column if not exists recovery_hashes jsonb not null default '[]'::jsonb`,
   // Marketplace collections, one table each (tables.js).
   ...tableMigrations(),
   // Email outbox: queued with the change that causes it, delivered by the worker with retries.

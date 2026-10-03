@@ -7,6 +7,7 @@ import { PageHead } from './shell.jsx';
 import * as A from '@crateline/domain/actions.js';
 import { fmtMoney } from '@crateline/domain/fin.js';
 import { apiEnabled, api } from './api.js';
+import QRCode from 'qrcode';
 import * as AX from '@crateline/domain/actions.js';
 const { useState, useEffect, useRef } = React;
 
@@ -254,7 +255,7 @@ export function Notifications() {
 }
 
 export function AccountSettings() {
-  const { db, me, update, toast, nav, perform, emailMode } = useApp();
+  const { db, me, update, toast, nav, perform, emailMode, refresh } = useApp();
   const [p, setP] = useState({ name: me.name, username: me.username, email: me.email, phone: me.phone, telegram: me.telegram, hue: me.hue });
   const [pendingEmail, setPendingEmail] = useState(null); const [err, setErr] = useState({});
   // API mode email change: the new address is confirmed from a link; the password is asked first.
@@ -319,7 +320,7 @@ export function AccountSettings() {
         <div className="row-gap"><Btn onClick={changePassword}>Change password</Btn><button className="linkbtn small" onClick={() => nav({ page: 'forgot' })}>Forgot current password?</button></div>
       </Section>
       <Section title="Two-factor authentication" action={<Badge tone={me.twoFA ? 'ok' : 'muted'}>{me.twoFA ? 'On' : 'Off'}</Badge>}>
-        {apiEnabled ? <Notice tone="info" title="Not available yet">Two-factor sign-in is not supported by this server yet. Your account uses your password only.</Notice>
+        {apiEnabled ? <TwoFactorPanel on={me.twoFA} onChanged={refresh} />
           : me.twoFA ? <div className="row-between"><p className="small">Authenticator app is required at sign-in. <Sim /></p><Btn v="ghost" onClick={() => { update(d => { d.users[me.id].twoFA = false; }); toast('Two-factor authentication turned off'); }}>Turn off</Btn></div>
           : tfa ? <div className="tfa"><div className="qr" aria-label="Sample QR code">{Array.from({ length: 64 }, (_, i) => <i key={i} className={(i * 37 + i % 7) % 3 ? '' : 'on'} />)}</div>
             <div><p className="small">Scan with an authenticator app, then enter the 6-digit code. <b>Demo code: 123456</b></p><Field label="Code"><input inputMode="numeric" maxLength="6" value={code} onChange={e => setCode(e.target.value)} /></Field>
@@ -339,4 +340,43 @@ export function AccountSettings() {
     {del && <Confirm danger title="Request account deletion?" confirmLabel="Request deletion" body={outstanding.length ? 'Your request stays pending until these items are resolved:' : 'No outstanding orders, cases or payouts were found.'} onClose={() => setDel(false)} onConfirm={() => perform('requestDeletion', {}, d => AX.requestDeletion(d, d.users[me.id], outstanding), 'Deletion request recorded')}>
       {outstanding.length > 0 && <ul className="small">{outstanding.map(x => <li key={x}>{x}</li>)}</ul>}</Confirm>}
   </>;
+}
+
+// ---------- two-factor sign-in (API mode), used in account settings and the staff security dialog
+function RecoveryCodes({ codes, onDone }) {
+  const { toast } = useApp(); const text = 'Crateline recovery codes. Each works once.\n\n' + codes.join('\n') + '\n';
+  const copy = async () => { try { await navigator.clipboard.writeText(codes.join('\n')); toast('Recovery codes copied'); } catch { toast('Copy failed. Select the codes and copy them yourself.', 'bad'); } };
+  const download = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' })); a.download = 'crateline-recovery-codes.txt'; a.click(); URL.revokeObjectURL(a.href); };
+  return <div className="stack" style={{ gap: 12 }}>
+    <Notice tone="warn" title="Save these recovery codes now">Each code signs you in once if you lose your phone. They are not shown again.</Notice>
+    <ul className="recovery-codes" aria-label="Recovery codes">{codes.map(c => <li key={c}><code>{c}</code></li>)}</ul>
+    <div className="row-gap"><Btn size="sm" icon="copy" onClick={copy}>Copy</Btn><Btn size="sm" icon="download" onClick={download}>Download as text</Btn><Btn size="sm" v="primary" onClick={onDone}>I have saved them</Btn></div>
+  </div>;
+}
+export function TwoFactorPanel({ on, onChanged }) {
+  const { toast } = useApp();
+  const [stage, setStage] = useState('idle'); const [setup, setSetup] = useState(null); const [qr, setQr] = useState(''); const [code, setCode] = useState(''); const [pw, setPw] = useState(''); const [err, setErr] = useState({}); const [codes, setCodes] = useState(null); const [busy, setBusy] = useState(false);
+  const fail = x => { setBusy(false); setErr({ [x.field || 'form']: x.message }); };
+  async function start() { setBusy(true); setErr({}); try { const r = await api.twoFactorSetup(); setSetup(r); setQr(await QRCode.toDataURL(r.uri, { margin: 1, width: 176 })); setStage('setup'); } catch (x) { fail(x); } setBusy(false); }
+  async function enable() { setBusy(true); setErr({}); try { const r = await api.twoFactorEnable(code.trim()); await onChanged(); setCodes(r.recoveryCodes); setStage('codes'); setCode(''); } catch (x) { fail(x); } setBusy(false); }
+  async function disable() { setBusy(true); setErr({}); try { await api.twoFactorDisable(pw, code.trim()); setStage('idle'); setPw(''); setCode(''); toast('Two-factor sign-in turned off'); await onChanged(); } catch (x) { fail(x); } setBusy(false); }
+  async function regen() { setBusy(true); setErr({}); try { const r = await api.twoFactorRecovery(code.trim()); setCodes(r.recoveryCodes); setStage('codes'); setCode(''); } catch (x) { fail(x); } setBusy(false); }
+  if (stage === 'codes') return <RecoveryCodes codes={codes} onDone={() => { setCodes(null); setStage('idle'); toast(on ? 'Two-factor sign-in is on' : 'Recovery codes saved'); }} />;
+  if (stage === 'setup') return <div className="tfa">
+    <img className="tfa-qr" src={qr} width="176" height="176" alt="QR code for your authenticator app" />
+    <div className="stack" style={{ gap: 10, flex: 1, minWidth: 220 }}>
+      <p className="small">Scan the code with an authenticator app (Google Authenticator, 1Password, Authy or similar), or enter this key yourself:</p>
+      <code className="tfa-key">{setup.secret.match(/.{1,4}/g).join(' ')}</code>
+      <Field label="6-digit code from the app" error={err.code}><input inputMode="numeric" autoComplete="one-time-code" maxLength="6" value={code} onChange={e => setCode(e.target.value.replace(/\D/g, ''))} /></Field>
+      {err.form && <p className="ferr">{err.form}</p>}
+      <div className="row-gap"><Btn v="primary" disabled={busy || code.length !== 6} onClick={enable}>{busy ? 'Checking…' : 'Turn on'}</Btn><Btn v="ghost" onClick={() => setStage('idle')}>Cancel</Btn></div>
+    </div></div>;
+  if (stage === 'off' || stage === 'regen') return <div className="stack" style={{ gap: 4 }}>
+    {stage === 'off' && <Field label="Password" error={err.password}><input type="password" autoComplete="current-password" value={pw} onChange={e => setPw(e.target.value)} /></Field>}
+    <Field label="Authenticator or recovery code" error={err.code}><input autoComplete="one-time-code" maxLength="12" value={code} onChange={e => setCode(e.target.value)} /></Field>
+    {err.form && <p className="ferr">{err.form}</p>}
+    <div className="row-gap">{stage === 'off' ? <Btn v="danger" disabled={busy || !pw || !code.trim()} onClick={disable}>Turn off two-factor sign-in</Btn> : <Btn v="primary" disabled={busy || !code.trim()} onClick={regen}>Create new recovery codes</Btn>}<Btn v="ghost" onClick={() => { setStage('idle'); setErr({}); }}>Cancel</Btn></div>
+  </div>;
+  return on ? <div className="row-between"><p className="small">Signing in needs a code from your authenticator app.</p><div className="row-gap"><Btn size="sm" onClick={() => setStage('regen')}>New recovery codes</Btn><Btn size="sm" v="ghost" onClick={() => setStage('off')}>Turn off</Btn></div></div>
+    : <div className="row-between"><p className="small muted">Add a second step at sign-in with an authenticator app.</p><Btn disabled={busy} onClick={start}>{busy ? 'Starting…' : 'Set up'}</Btn>{err.form && <p className="ferr">{err.form}</p>}</div>;
 }

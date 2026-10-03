@@ -18,8 +18,14 @@ async function call(path, { method = 'GET', body } = {}) {
 }
 export const api = {
   health: () => call('/health'),
-  login: async (email, password) => { const r = await call('/api/auth/login', { method: 'POST', body: { email, password } }); setToken(r.token); return r; },
-  staffLogin: async (email, password) => { const r = await call('/api/auth/staff/login', { method: 'POST', body: { email, password } }); setToken(r.token); return r; },
+  // With two-factor sign-in on, these return { mfa: 'required', ticket } and no session yet.
+  login: async (email, password) => { const r = await call('/api/auth/login', { method: 'POST', body: { email, password } }); if (r.token) setToken(r.token); return r; },
+  staffLogin: async (email, password) => { const r = await call('/api/auth/staff/login', { method: 'POST', body: { email, password } }); if (r.token) setToken(r.token); return r; },
+  mfa: async (ticket, code) => { const r = await call('/api/auth/mfa', { method: 'POST', body: { ticket, code } }); setToken(r.token); return r; },
+  twoFactorSetup: () => call('/api/auth/2fa/setup', { method: 'POST' }),
+  twoFactorEnable: code => call('/api/auth/2fa/enable', { method: 'POST', body: { code } }),
+  twoFactorDisable: (password, code) => call('/api/auth/2fa/disable', { method: 'POST', body: { password, code } }),
+  twoFactorRecovery: code => call('/api/auth/2fa/recovery', { method: 'POST', body: { code } }),
   register: async body => { const r = await call('/api/auth/register', { method: 'POST', body }); setToken(r.token); return r; },
   logout: () => setToken(null),
   hasToken: () => !!token,

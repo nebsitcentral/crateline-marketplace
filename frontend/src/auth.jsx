@@ -28,15 +28,32 @@ function GoogleBtn() {
   </>;
 }
 
+// Second sign-in step for accounts with two-factor sign-in: an authenticator or recovery code.
+export function MfaCodeStep({ ticket, onBack }) {
+  const { apiSignIn } = useApp(); const [code, setCode] = useState(''); const [err, setErr] = useState(''); const [busy, setBusy] = useState(false);
+  async function submit(e) {
+    e.preventDefault(); if (!code.trim()) return setErr('Enter the 6-digit code from your authenticator app, or a recovery code.');
+    setBusy(true); setErr('');
+    try { await apiSignIn(() => api.mfa(ticket, code.trim())); }
+    catch (x) { setBusy(false); if (x.status === 401) { onBack(x.message); return; } setErr(x.message); }
+  }
+  return <form onSubmit={submit} noValidate>
+    <p className="muted small" style={{ marginBottom: 14 }}>Open your authenticator app and enter the 6-digit code for Crateline. Lost your phone? Enter one of your recovery codes instead.</p>
+    <Field label="Code" required error={err}><input autoFocus inputMode="text" autoComplete="one-time-code" maxLength="12" value={code} onChange={e => setCode(e.target.value)} /></Field>
+    <Btn v="primary" type="submit" className="block" disabled={busy}>{busy ? 'Checking…' : 'Verify and sign in'}</Btn>
+    <p className="small" style={{ marginTop: 12 }}><a href="#" onClick={e => { e.preventDefault(); onBack(); }}>Use a different account</a></p>
+  </form>;
+}
+
 export function SignIn() {
   const { db, nav, signIn, apiSignIn } = useApp();
-  const [id, setId] = useState(''); const [pw, setPw] = useState(''); const [err, setErr] = useState(''); const [busy, setBusy] = useState(false);
+  const [id, setId] = useState(''); const [pw, setPw] = useState(''); const [err, setErr] = useState(''); const [busy, setBusy] = useState(false); const [ticket, setTicket] = useState(null);
   async function submit(e) {
     e.preventDefault();
     if (apiEnabled) {
       if (!id.trim() || !pw) return setErr('Enter your email or username and password.');
       setBusy(true); setErr('');
-      try { await apiSignIn(() => api.login(id.trim(), pw)); }
+      try { const r = await apiSignIn(() => api.login(id.trim(), pw)); if (r?.mfa) { setBusy(false); setTicket(r.ticket); } }
       catch (x) { setBusy(false); setErr(x.status === 401 ? 'Email, username or password is incorrect. Check the details or reset your password.' : x.message); }
       return;
     }
@@ -46,6 +63,7 @@ export function SignIn() {
     if (!u.emailVerified) return nav({ page: 'verify', userId: u.id });
     signIn(u.id);
   }
+  if (ticket) return <AuthShell title="Enter your sign-in code" sub="Two-factor sign-in is on for this account."><MfaCodeStep ticket={ticket} onBack={m => { setTicket(null); setPw(''); setErr(m || ''); }} /></AuthShell>;
   return <AuthShell title="Sign in" sub="Welcome back to Crateline." foot={<>New here? <a href="#" onClick={e => { e.preventDefault(); nav({ page: 'signup' }); }}>Create an account</a></>}>
     {!apiEnabled && <><GoogleBtn /><div className="or"><span>or</span></div></>}
     <form onSubmit={submit} noValidate>

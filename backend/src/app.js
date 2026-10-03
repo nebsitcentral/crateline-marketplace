@@ -9,6 +9,7 @@ import { DomainError, tick, audit } from '@crateline/domain/fin.js';
 import { createTicket } from '@crateline/domain/actions.js';
 import { addPayoutMethod } from '@crateline/domain/seller.js';
 import { compose, emailEnabled, processOutbox } from './email.js';
+import { newSecret, verifyCode, otpauthUri, newRecoveryCodes, hashRecovery, encrypt, decrypt } from './totp.js';
 import { config } from './config.js';
 import { currentTerms } from '@crateline/domain/logic.js';
 import { catalogView, customerView, staffView } from './views.js';
@@ -52,6 +53,8 @@ export function createApp(store, { transport = null } = {}) {
     const h = req.headers.authorization || '';
     if (!h.startsWith('Bearer ')) { if (required) return res.status(401).json({ error: 'Sign in required.' }); return next(); }
     try { req.auth = jwt.verify(h.slice(7), config.jwtSecret); } catch { return res.status(401).json({ error: 'Your session has expired. Sign in again.' }); }
+    // Only session tokens open the API; a two-factor ticket ('mfa') is accepted by /api/auth/mfa alone.
+    if (req.auth.kind !== 'user' && req.auth.kind !== 'staff') return res.status(401).json({ error: 'Sign in required.' });
     next();
   });
   const actorFrom = (d, a) => {
@@ -99,13 +102,72 @@ export function createApp(store, { transport = null } = {}) {
     const acc = address && await store.findAccount(address);
     // Same message for unknown email and wrong password, so responses do not reveal accounts.
     if (!acc || acc.kind !== kind || !(await bcrypt.compare(String(password || ''), acc.hash))) return res.status(401).json({ error: 'Email or password is incorrect.' });
-    if (kind === 'staff') {
-      const { doc } = await store.read(); if (!doc.staff[acc.refId]?.active) return res.status(403).json({ error: 'This staff account is inactive.' });
-      await store.transact(d => { const s = d.staff[acc.refId]; s.lastSignIn = Date.now(); d.securityEvents.unshift({ id: 'SE-' + Date.now(), at: Date.now(), type: 'Sign-in', who: s.name, detail: 'Password sign-in via API', status: 'Normal' }); });
-    }
-    const { doc: cur } = await store.read(); const tv = (kind === 'staff' ? cur.staff : cur.users)[acc.refId]?.tokenVersion || 0;
-    res.json({ token: sign(kind, acc.refId, tv), kind, id: acc.refId });
+    if (kind === 'staff') { const { doc } = await store.read(); if (!doc.staff[acc.refId]?.active) return res.status(403).json({ error: 'This staff account is inactive.' }); }
+    // With two-factor sign-in on, the password only earns a 5-minute ticket for the code step.
+    if (acc.totpSecret) return res.json({ mfa: 'required', ticket: jwt.sign({ kind: 'mfa', account: kind, id: acc.refId, email: acc.email }, config.jwtSecret, { expiresIn: '5m' }) });
+    res.json(await finishSignIn(kind, acc, 'Password sign-in via API'));
   });
+  const finishSignIn = async (kind, acc, detail) => {
+    if (kind === 'staff') await store.transact(d => { const s = d.staff[acc.refId]; s.lastSignIn = Date.now(); d.securityEvents.unshift({ id: 'SE-' + Date.now(), at: Date.now(), type: 'Sign-in', who: s.name, detail, status: 'Normal' }); });
+    const { doc: cur } = await store.read(); const tv = (kind === 'staff' ? cur.staff : cur.users)[acc.refId]?.tokenVersion || 0;
+    return { token: sign(kind, acc.refId, tv), kind, id: acc.refId };
+  };
+  // Checks a six-digit authenticator code (once per step) or an unused recovery code.
+  const checkSecondFactor = async (acc, code) => {
+    const c = String(code || '').trim();
+    if (/^\d{6}$/.test(c.replace(/\s/g, ''))) { const step = verifyCode(decrypt(acc.totpSecret), c, { lastStep: acc.totpLastStep ?? -1 }); return step != null && await store.useMfaStep(acc.email, step) ? 'code' : null; }
+    return c && await store.useRecovery(acc.email, hashRecovery(c)) ? 'recovery' : null;
+  };
+  const badCode = () => { throw Object.assign(new DomainError('That code is not valid. Check the time on your phone, wait for a new code, or use a recovery code.', 'validation'), { field: 'code' }); };
+  app.post('/api/auth/mfa', authLimiter, wrap(async (req, res) => {
+    const { ticket, code } = req.body || {};
+    let t; try { t = jwt.verify(String(ticket || ''), config.jwtSecret); } catch { t = null; }
+    if (!t || t.kind !== 'mfa') return res.status(401).json({ error: 'The sign-in step has expired. Enter your email and password again.' });
+    const acc = await store.findAccount(t.email);
+    if (!acc || acc.refId !== t.id || acc.kind !== t.account || !acc.totpSecret) return res.status(401).json({ error: 'The sign-in step has expired. Enter your email and password again.' });
+    const used = await checkSecondFactor(acc, code); if (!used) badCode();
+    res.json(await finishSignIn(t.account, acc, used === 'recovery' ? 'Password and recovery code sign-in' : 'Password and authenticator code sign-in'));
+  }));
+
+  // ---------- setting up and turning off two-factor sign-in
+  const meAccount = async auth => { const { doc } = await store.read(); const rec = actorFrom(doc, auth); return { rec, acc: await store.findAccount(rec.email) }; };
+  const recordTwoFactor = (auth, on) => store.transact(async (d, tx) => {
+    const rec = actorFrom(d, auth); rec.twoFA = on;
+    if (auth.kind === 'staff') audit(d, rec, on ? 'Two-factor sign-in turned on' : 'Two-factor sign-in turned off', rec.id);
+    if (emailEnabled()) await tx.queueEmail(compose(on ? 'twoFactorOn' : 'twoFactorOff', rec.email, { name: rec.name.split(' ')[0] }));
+  });
+  app.post('/api/auth/2fa/setup', authLimiter, auth(), wrap(async (req, res) => {
+    const { rec, acc } = await meAccount(req.auth);
+    if (acc.totpSecret) throw new DomainError('Two-factor sign-in is already on.');
+    const secret = newSecret(); await store.setMfa(acc.email, { totpPending: encrypt(secret) });
+    res.json({ secret, uri: otpauthUri(secret, rec.email) });
+  }));
+  app.post('/api/auth/2fa/enable', authLimiter, auth(), wrap(async (req, res) => {
+    const { acc } = await meAccount(req.auth);
+    if (acc.totpSecret) throw new DomainError('Two-factor sign-in is already on.');
+    if (!acc.totpPending) throw new DomainError('Start the set-up again to get a new key.');
+    const secret = decrypt(acc.totpPending); const step = verifyCode(secret, req.body?.code); if (step == null) badCode();
+    const codes = newRecoveryCodes();
+    await store.setMfa(acc.email, { totpSecret: encrypt(secret), totpPending: null, totpLastStep: step, recoveryHashes: codes.map(hashRecovery) });
+    await recordTwoFactor(req.auth, true); kick();
+    res.json({ ok: true, recoveryCodes: codes });
+  }));
+  app.post('/api/auth/2fa/disable', authLimiter, auth(), wrap(async (req, res) => {
+    const { acc } = await meAccount(req.auth);
+    if (!acc.totpSecret) throw new DomainError('Two-factor sign-in is not on.');
+    if (!(await bcrypt.compare(String(req.body?.password || ''), acc.hash))) throw Object.assign(new DomainError('Your password is incorrect.', 'validation'), { field: 'password' });
+    if (!(await checkSecondFactor(acc, req.body?.code))) badCode();
+    await store.setMfa(acc.email, { totpSecret: null, totpPending: null, totpLastStep: null, recoveryHashes: [] });
+    await recordTwoFactor(req.auth, false); kick();
+    res.json({ ok: true });
+  }));
+  app.post('/api/auth/2fa/recovery', authLimiter, auth(), wrap(async (req, res) => {
+    const { acc } = await meAccount(req.auth);
+    if (!acc.totpSecret) throw new DomainError('Two-factor sign-in is not on.');
+    if (!(await checkSecondFactor(acc, req.body?.code))) badCode();
+    const codes = newRecoveryCodes(); await store.setMfa(acc.email, { recoveryHashes: codes.map(hashRecovery) });
+    res.json({ ok: true, recoveryCodes: codes });
+  }));
   app.post('/api/auth/login', authLimiter, login('user'));
   app.post('/api/auth/staff/login', authLimiter, login('staff'));
 
