@@ -66,7 +66,7 @@ export function createApp(store, { transport = null } = {}) {
     return rec;
   };
 
-  app.get('/health', wrap(async (req, res) => res.json({ ok: true, store: store.kind, simulateProviders: config.simulateProviders, demoControls: config.allowDemoControls, email: config.emailTransport })));
+  app.get('/health', wrap(async (req, res) => res.json({ ok: true, store: store.kind, simulateProviders: config.simulateProviders, demoControls: config.allowDemoControls, email: config.emailTransport, version: (process.env.RAILWAY_GIT_COMMIT_SHA || '').slice(0, 7) || 'local' })));
 
   app.get('/api/catalog', wrap(async (req, res) => { const { doc } = await store.read(); res.json(catalogView(doc)); }));
 
