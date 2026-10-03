@@ -1,0 +1,287 @@
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import bcrypt from 'bcryptjs';
+import crypto from 'node:crypto';
+import jwt from 'jsonwebtoken';
+import { DomainError, tick, audit } from '@crateline/domain/fin.js';
+import { createTicket } from '@crateline/domain/actions.js';
+import { addPayoutMethod } from '@crateline/domain/seller.js';
+import { compose, emailEnabled, processOutbox } from './email.js';
+import { config } from './config.js';
+import { currentTerms } from '@crateline/domain/logic.js';
+import { catalogView, customerView, staffView } from './views.js';
+import { customer as CUSTOMER, staff as STAFF } from './actions.js';
+import { seedStore } from './seed.js';
+
+const STATUS = { unauthenticated: 401, denied: 403, not_found: 404, stale: 409, validation: 422, 'needs-decision': 422, rejected: 400 };
+
+// Single-use tokens: the random token goes into the email link; only its SHA-256 hash is stored.
+const newToken = () => crypto.randomBytes(32).toString('base64url');
+const hashToken = t => crypto.createHash('sha256').update(String(t)).digest('hex');
+const HOUR_MS = 3600e3;
+
+export function createApp(store, { transport = null } = {}) {
+  // Deliver queued email soon after a request queues it; the interval worker in index.js retries.
+  let sending = null;
+  const kick = () => { if (transport && !sending) sending = processOutbox(store, transport).catch(e => console.error('email send failed', e)).finally(() => { sending = null; }); };
+  // Queues an email with a fresh single-use token, inside a transaction.
+  const queueTokenEmail = async (tx, { kind, template, to, name, accountKind, refId, newEmail = null, hours }) => {
+    const token = newToken();
+    // `to` is the account's current address; for an email change the link goes to newEmail.
+    await tx.saveToken({ hash: hashToken(token), kind, email: to, accountKind, refId, newEmail, expiresAt: Date.now() + hours * HOUR_MS });
+    await tx.queueEmail(compose(template, newEmail || to, { name, token }));
+  };
+  const app = express();
+  app.set('trust proxy', 1);
+  app.use(helmet());
+  app.use(cors({ origin: (origin, cb) => cb(null, !origin || config.origins.includes(origin)), credentials: false }));
+  app.use(express.json({ limit: '200kb' }));
+
+  const authLimiter = rateLimit({ windowMs: 15 * 60e3, limit: config.authRateLimit, standardHeaders: true, legacyHeaders: false });
+  // Staff tokens carry the account's tokenVersion; revoking all sessions raises it.
+  const sign = (kind, id, tv = 0) => jwt.sign({ kind, id, tv }, config.jwtSecret, { expiresIn: config.jwtTtl });
+  const wrap = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(e => {
+    if (e instanceof DomainError) return res.status(STATUS[e.code] || 400).json({ error: e.message, code: e.code, field: e.field });
+    if (e.status) return res.status(e.status).json({ error: e.message, field: e.field });
+    console.error(e); res.status(500).json({ error: 'Something went wrong. Nothing was changed.' });
+  });
+  // Resolve the caller from the token on every request; inactive staff are refused.
+  const auth = (required = true) => wrap(async (req, res, next) => {
+    const h = req.headers.authorization || '';
+    if (!h.startsWith('Bearer ')) { if (required) return res.status(401).json({ error: 'Sign in required.' }); return next(); }
+    try { req.auth = jwt.verify(h.slice(7), config.jwtSecret); } catch { return res.status(401).json({ error: 'Your session has expired. Sign in again.' }); }
+    next();
+  });
+  const actorFrom = (d, a) => {
+    const rec = a.kind === 'staff' ? d.staff[a.id] : d.users[a.id];
+    if (!rec) throw new DomainError('Account not found.', 'denied');
+    if (a.kind === 'staff' && !rec.active) throw new DomainError('This staff account is inactive.', 'denied');
+    // tokenVersion rises when all sessions are revoked or the password changes.
+    if ((rec.tokenVersion || 0) !== (a.tv || 0)) throw new DomainError('Your session was ended. Sign in again.', 'unauthenticated');
+    return rec;
+  };
+
+  app.get('/health', wrap(async (req, res) => res.json({ ok: true, store: store.kind, simulateProviders: config.simulateProviders, demoControls: config.allowDemoControls, email: config.emailTransport })));
+
+  app.get('/api/catalog', wrap(async (req, res) => { const { doc } = await store.read(); res.json(catalogView(doc)); }));
+
+  app.post('/api/auth/register', authLimiter, wrap(async (req, res) => {
+    const { name, username, email, password, phone = '', telegram = '', acceptTerms } = req.body || {};
+    // Each error names its form field so the sign-up form can show it in place.
+    const invalid = (msg, field) => { throw Object.assign(new DomainError(msg, 'validation'), { field }); };
+    if (typeof name !== 'string' || name.trim().length < 2 || name.length > 100) invalid('Enter your full name.', 'name');
+    if (typeof username !== 'string' || !/^[a-z0-9._]{3,20}$/i.test(username)) invalid('Use 3 to 20 letters, numbers, dots or underscores.', 'username');
+    if (typeof email !== 'string' || email.length > 200 || !/^\S+@\S+\.\S+$/.test(email)) invalid('Enter a valid email address.', 'email');
+    if (typeof password !== 'string' || password.length < 8 || password.length > 200 || !/\d/.test(password)) invalid('Use at least 8 characters including a number.', 'password');
+    if (typeof phone !== 'string' || phone.length > 40) invalid('Enter a phone number of up to 40 characters.', 'phone');
+    if (typeof telegram !== 'string' || (telegram && !/^@\w{3,32}$/.test(telegram))) invalid('Telegram handles start with @.', 'telegram');
+    if (acceptTerms !== true) invalid('Accept the Terms and Privacy Policy to continue.', 'consent');
+    const hash = await bcrypt.hash(password, 10);
+    const { value: id } = await store.transact(async (d, tx) => {
+      if (Object.values(d.users).some(u => u.username.toLowerCase() === username.toLowerCase())) invalid('This username is taken. Try another.', 'username');
+      const id = 'u_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      await tx.createAccount({ email, kind: 'user', refId: id, hash });
+      d.users[id] = { id, name: String(name).trim(), username, email: email.toLowerCase(), phone, telegram, hue: Math.floor(Math.random() * 360), acct: 'AC-' + (101000 + Object.keys(d.users).length), joined: Date.now(), storeId: null, emailVerified: false, twoFA: false, prefs: { orders: true, messages: true, offers: true, marketing: false, email: true }, deletion: null, following: [], restrictions: [], lastActive: Date.now(), termsAccepted: { version: currentTerms(d), at: Date.now() } };
+      if (emailEnabled()) await queueTokenEmail(tx, { kind: 'verify', template: 'verify', to: email.toLowerCase(), name: String(name).trim().split(' ')[0], accountKind: 'user', refId: id, hours: 24 });
+      return id;
+    });
+    kick();
+    res.status(201).json({ token: sign('user', id), kind: 'user', id });
+  }));
+
+  const login = kind => wrap(async (req, res) => {
+    const { email, password } = req.body || {};
+    // Customers may sign in with their username; staff always use their email.
+    let address = typeof email === 'string' ? email.trim() : '';
+    if (kind === 'user' && address && !address.includes('@')) { const { doc } = await store.read(); address = Object.values(doc.users).find(u => u.username.toLowerCase() === address.toLowerCase())?.email || ''; }
+    const acc = address && await store.findAccount(address);
+    // Same message for unknown email and wrong password, so responses do not reveal accounts.
+    if (!acc || acc.kind !== kind || !(await bcrypt.compare(String(password || ''), acc.hash))) return res.status(401).json({ error: 'Email or password is incorrect.' });
+    if (kind === 'staff') {
+      const { doc } = await store.read(); if (!doc.staff[acc.refId]?.active) return res.status(403).json({ error: 'This staff account is inactive.' });
+      await store.transact(d => { const s = d.staff[acc.refId]; s.lastSignIn = Date.now(); d.securityEvents.unshift({ id: 'SE-' + Date.now(), at: Date.now(), type: 'Sign-in', who: s.name, detail: 'Password sign-in via API', status: 'Normal' }); });
+    }
+    const { doc: cur } = await store.read(); const tv = (kind === 'staff' ? cur.staff : cur.users)[acc.refId]?.tokenVersion || 0;
+    res.json({ token: sign(kind, acc.refId, tv), kind, id: acc.refId });
+  });
+  app.post('/api/auth/login', authLimiter, login('user'));
+  app.post('/api/auth/staff/login', authLimiter, login('staff'));
+
+  // Support requests: guests may send one; a signed-in customer's request is linked to their account.
+  app.post('/api/support', authLimiter, auth(false), wrap(async (req, res) => {
+    const { value: id } = await store.transact(d => {
+      const u = req.auth?.kind === 'user' ? actorFrom(d, req.auth) : null;
+      return createTicket(d, u ? u.id : null, req.body || {});
+    });
+    res.status(201).json({ ok: true, ticketId: id });
+  }));
+
+  // Changing the password ends every other session (tokenVersion) and returns a fresh token.
+  app.post('/api/auth/password', authLimiter, auth(), wrap(async (req, res) => {
+    const { current, next } = req.body || {};
+    if (typeof next !== 'string' || next.length < 8 || next.length > 200 || !/\d/.test(next)) throw Object.assign(new DomainError('New password needs 8 characters including a number.', 'validation'), { field: 'next' });
+    const { doc } = await store.read(); const actor = actorFrom(doc, req.auth);
+    const acc = await store.findAccount(actor.email);
+    if (!acc || !(await bcrypt.compare(String(current || ''), acc.hash))) throw Object.assign(new DomainError('Your current password is incorrect.', 'validation'), { field: 'current' });
+    const hash = await bcrypt.hash(next, 10);
+    const { value: tv } = await store.transact(async (d, tx) => {
+      const rec = req.auth.kind === 'staff' ? d.staff[req.auth.id] : d.users[req.auth.id];
+      await tx.setPassword(acc.email, hash); rec.tokenVersion = (rec.tokenVersion || 0) + 1;
+      if (req.auth.kind === 'staff') audit(d, rec, 'Password changed', rec.id);
+      if (emailEnabled()) await tx.queueEmail(compose('passwordChanged', acc.email, { name: rec.name.split(' ')[0] }));
+      return rec.tokenVersion;
+    });
+    kick();
+    res.json({ ok: true, token: sign(req.auth.kind, req.auth.id, tv) });
+  }));
+
+  // ---------- email verification, password reset and email change (need a working email transport)
+  const needEmail = () => { if (!emailEnabled()) throw new DomainError('Email is not set up on this server yet.', 'rejected'); };
+  const badLink = () => { throw new DomainError('This link is invalid, already used or expired. Request a new one.', 'rejected'); };
+  const passwordOk = p => typeof p === 'string' && p.length >= 8 && p.length <= 200 && /\d/.test(p);
+
+  app.post('/api/auth/verify/request', authLimiter, auth(), wrap(async (req, res) => {
+    needEmail(); if (req.auth.kind !== 'user') throw new DomainError('Only customer accounts verify their email here.', 'denied');
+    await store.transact(async (d, tx) => {
+      const u = actorFrom(d, req.auth); if (u.emailVerified) throw new DomainError('Your email address is already verified.');
+      await queueTokenEmail(tx, { kind: 'verify', template: 'verify', to: u.email, name: u.name.split(' ')[0], accountKind: 'user', refId: u.id, hours: 24 });
+    });
+    kick(); res.json({ ok: true });
+  }));
+  app.post('/api/auth/verify/confirm', authLimiter, wrap(async (req, res) => {
+    needEmail();
+    await store.transact(async (d, tx) => {
+      const t = await tx.useToken(hashToken(req.body?.token), 'verify', Date.now()); if (!t) badLink();
+      const u = d.users[t.refId]; if (!u || u.email !== t.email) badLink(); // the address changed since the link was sent
+      u.emailVerified = true;
+    });
+    res.json({ ok: true });
+  }));
+
+  // Same answer whether or not the account exists, so the form cannot be used to find accounts.
+  app.post('/api/auth/password/forgot', authLimiter, wrap(async (req, res) => {
+    needEmail();
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+    if (!/^\S+@\S+\.\S+$/.test(email)) throw Object.assign(new DomainError('Enter a valid email address.', 'validation'), { field: 'email' });
+    const acc = await store.findAccount(email);
+    if (acc) {
+      await store.transact(async (d, tx) => {
+        const rec = acc.kind === 'staff' ? d.staff[acc.refId] : d.users[acc.refId]; if (!rec || (acc.kind === 'staff' && !rec.active)) return;
+        await queueTokenEmail(tx, { kind: 'reset', template: 'reset', to: acc.email, name: rec.name.split(' ')[0], accountKind: acc.kind, refId: acc.refId, hours: 0.5 });
+      });
+      kick();
+    }
+    res.json({ ok: true });
+  }));
+  app.post('/api/auth/password/reset', authLimiter, wrap(async (req, res) => {
+    needEmail();
+    const { token, password } = req.body || {};
+    if (!passwordOk(password)) throw Object.assign(new DomainError('Use at least 8 characters including a number.', 'validation'), { field: 'password' });
+    const hash = await bcrypt.hash(password, 10);
+    const { value } = await store.transact(async (d, tx) => {
+      const t = await tx.useToken(hashToken(token), 'reset', Date.now()); if (!t) badLink();
+      const rec = t.accountKind === 'staff' ? d.staff[t.refId] : d.users[t.refId]; if (!rec) badLink();
+      await tx.setPassword(t.email, hash); rec.tokenVersion = (rec.tokenVersion || 0) + 1; // every session ends
+      if (t.accountKind === 'staff') audit(d, rec, 'Password reset by email', rec.id);
+      await tx.queueEmail(compose('passwordChanged', t.email, { name: rec.name.split(' ')[0] }));
+      return { kind: t.accountKind };
+    });
+    kick(); res.json({ ok: true, kind: value.kind });
+  }));
+
+  // Changing the address: confirmed from the new address; the old one is told when it happens.
+  app.post('/api/auth/email/change', authLimiter, auth(), wrap(async (req, res) => {
+    needEmail(); if (req.auth.kind !== 'user') throw new DomainError('Staff email addresses are changed by a Super Admin.', 'denied');
+    const { newEmail, password } = req.body || {};
+    const to = typeof newEmail === 'string' ? newEmail.trim().toLowerCase() : '';
+    if (!/^\S+@\S+\.\S+$/.test(to) || to.length > 200) throw Object.assign(new DomainError('Enter a valid email address.', 'validation'), { field: 'email' });
+    const { doc } = await store.read(); const u = actorFrom(doc, req.auth);
+    const acc = await store.findAccount(u.email);
+    if (!acc || !(await bcrypt.compare(String(password || ''), acc.hash))) throw Object.assign(new DomainError('Your password is incorrect.', 'validation'), { field: 'password' });
+    if (to === u.email) throw Object.assign(new DomainError('That is already your email address.', 'validation'), { field: 'email' });
+    if (await store.findAccount(to)) throw Object.assign(new DomainError('An account already uses this email.', 'validation'), { field: 'email' });
+    await store.transact(async (d, tx) => { const me = actorFrom(d, req.auth); await queueTokenEmail(tx, { kind: 'email', template: 'emailChange', to: me.email, name: me.name.split(' ')[0], accountKind: 'user', refId: me.id, newEmail: to, hours: 24 }); });
+    kick(); res.json({ ok: true });
+  }));
+  app.post('/api/auth/email/confirm', authLimiter, wrap(async (req, res) => {
+    needEmail();
+    await store.transact(async (d, tx) => {
+      const t = await tx.useToken(hashToken(req.body?.token), 'email', Date.now()); if (!t) badLink();
+      const u = d.users[t.refId]; if (!u || u.email !== t.email) badLink();
+      await tx.changeAccountEmail(t.email, t.newEmail);
+      u.email = t.newEmail; u.emailVerified = true;
+      await tx.queueEmail(compose('emailChanged', t.email, { name: u.name.split(' ')[0], newEmail: t.newEmail }));
+    });
+    kick(); res.json({ ok: true });
+  }));
+
+  // New payout destinations need the account password again, checked here before the change.
+  app.post('/api/payout-methods', authLimiter, auth(), wrap(async (req, res) => {
+    if (req.auth.kind !== 'user') throw new DomainError('Only sellers can add payout methods.', 'denied');
+    const { password, ...method } = req.body || {};
+    const { doc } = await store.read(); const actor = actorFrom(doc, req.auth);
+    const acc = await store.findAccount(actor.email);
+    if (!acc || !(await bcrypt.compare(String(password || ''), acc.hash))) throw Object.assign(new DomainError('Your password is incorrect.', 'validation'), { field: 'password' });
+    const { version } = await store.transact(d => addPayoutMethod(d, actorFrom(d, req.auth), method));
+    res.status(201).json({ ok: true, version });
+  }));
+
+  // Lists that grow without limit are capped in /api/state (newest first); older entries come
+  // from GET /api/list/:resource, using the same view, so permissions are identical.
+  const PAGED = { audit: 300, notifications: 100, staffNotes: 100 };
+  const viewFor = (doc, auth) => { const actor = actorFrom(doc, auth); return auth.kind === 'staff' ? staffView(doc, actor) : customerView(doc, actor); };
+  app.get('/api/state', auth(), wrap(async (req, res) => {
+    const { doc, version } = await store.read(); const view = viewFor(doc, req.auth);
+    const more = {};
+    for (const [k, cap] of Object.entries(PAGED)) if (Array.isArray(view[k]) && view[k].length > cap) { view[k] = view[k].slice(0, cap); more[k] = true; }
+    res.json({ version, kind: req.auth.kind, view, more });
+  }));
+  app.get('/api/list/:resource', auth(), wrap(async (req, res) => {
+    const name = req.params.resource;
+    if (!Object.hasOwn(PAGED, name)) return res.status(404).json({ error: `Unknown list "${name}".` });
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
+    const { doc, version } = await store.read(); const list = viewFor(doc, req.auth)[name];
+    if (!Array.isArray(list)) throw new DomainError('Access denied. Your role cannot view this list.', 'denied');
+    // Cursor: the id of the last item already shown; the page starts after it.
+    const start = req.query.after ? list.findIndex(x => x.id === req.query.after) + 1 : 0;
+    if (req.query.after && start === 0) throw new DomainError('That position in the list no longer exists. Reload the list.', 'stale');
+    const items = list.slice(start, start + limit);
+    res.json({ version, items, next: start + limit < list.length ? items.at(-1).id : null });
+  }));
+
+  app.post('/api/actions/:name', auth(), wrap(async (req, res) => {
+    const table = req.auth.kind === 'staff' ? STAFF : CUSTOMER; const fn = Object.hasOwn(table, req.params.name) && table[req.params.name];
+    if (!fn) return res.status(404).json({ error: `Unknown action "${req.params.name}" for ${req.auth.kind} accounts.` });
+    try {
+      const { value, version } = await store.transact(d => fn(d, actorFrom(d, req.auth), req.body?.args || {}));
+      res.json({ ok: true, result: value ?? null, version });
+    } catch (e) {
+      // Record refused staff attempts (for example self-approval) in the audit history.
+      if (e instanceof DomainError && e.code !== 'unauthenticated' && req.auth.kind === 'staff') await store.transact(d => { audit(d, d.staff[req.auth.id], 'Action rejected: ' + req.params.name, req.body?.args?.approvalId || req.body?.args?.refundId || req.body?.args?.payoutId || '-', { reason: e.message, outcome: e.code === 'denied' ? 'Blocked' : e.code === 'stale' ? 'Stale view refused' : 'Rejected' }); }).catch(() => { });
+      throw e;
+    }
+  }));
+
+  // Demo-only controls. Disabled when ALLOW_DEMO_CONTROLS=false.
+  const demoOnly = wrap(async (req, res, next) => { if (!config.allowDemoControls) return res.status(403).json({ error: 'Demo controls are disabled on this server.' }); next(); });
+  const superOnly = wrap(async (req, res, next) => { const { doc } = await store.read(); const s = req.auth.kind === 'staff' && doc.staff[req.auth.id]; if (!s?.active || !s.roles.includes('superadmin')) return res.status(403).json({ error: 'Super Admin only.' }); next(); });
+  app.post('/api/demo/advance', auth(), demoOnly, superOnly, wrap(async (req, res) => {
+    const ms = Math.min(Math.max(Number(req.body?.ms) || 0, 0), 30 * 864e5);
+    const { version } = await store.transact(d => { d.clockOffset = (d.clockOffset || 0) + ms; tick(d); });
+    res.json({ ok: true, version });
+  }));
+  // Simulated provider outcomes used by staff screens (refund, payout, reconciliation, connection tests).
+  app.post('/api/demo/scenario', auth(), demoOnly, superOnly, wrap(async (req, res) => {
+    const { provider, testConn } = req.body || {};
+    if (provider != null && !['success', 'failure', 'unknown'].includes(provider)) throw new DomainError('Provider outcome must be success, failure or unknown.', 'validation');
+    if (testConn != null && !['success', 'failure', 'timeout'].includes(testConn)) throw new DomainError('Connection test outcome must be success, failure or timeout.', 'validation');
+    const { version } = await store.transact(d => { d.scenario = { ...d.scenario, ...(provider ? { provider } : {}), ...(testConn ? { testConn } : {}) }; });
+    res.json({ ok: true, version });
+  }));
+  app.post('/api/demo/reset', auth(), demoOnly, superOnly, wrap(async (req, res) => { await seedStore(store, { force: true }); res.json({ ok: true }); }));
+
+  app.use((req, res) => res.status(404).json({ error: 'Not found.' }));
+  return app;
+}

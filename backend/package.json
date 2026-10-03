@@ -1,0 +1,26 @@
+{
+  "name": "backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Crateline API (Node.js + Express). Deploys to Railway.",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js",
+    "migrate": "node src/migrate.js",
+    "seed": "node src/seed.js",
+    "test": "node --test --test-concurrency=1"
+  },
+  "dependencies": {
+    "@crateline/domain": "*",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "express-rate-limit": "^7.4.0",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.13.0"
+  }
+}

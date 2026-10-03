@@ -1,0 +1,8 @@
+{
+  "name": "@crateline/domain",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Business rules shared by the frontend and the API: money, ledger, permissions, approvals, state transitions, seed fixtures.",
+  "exports": { "./*": "./src/*" }
+}

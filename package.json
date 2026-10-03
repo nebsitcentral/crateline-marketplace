@@ -1,0 +1,14 @@
+{
+  "name": "crateline-marketplace",
+  "private": true,
+  "description": "Multivendor digital products and services marketplace: React frontend, Node.js API, shared domain logic.",
+  "workspaces": ["packages/domain", "frontend", "backend"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "npm run dev -w frontend",
+    "dev:api": "npm run dev -w backend",
+    "build": "npm run build -w frontend",
+    "test": "npm test -w backend",
+    "start": "npm start -w backend"
+  }
+}
