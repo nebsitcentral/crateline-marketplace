@@ -20,7 +20,8 @@ Seller panel, and Admin and Super Admin management panels.
   (Brevo), two-factor sign-in and file storage (Cloudflare R2) are real once their keys are set.
 * **Crypto payments:** real through NOWPayments once its keys are set (see below).
 * **Seller identity checks:** real through Didit once its keys are set (see below).
-* **Not yet done:** card and wallet payments and payouts are simulated. `CLAUDE.md` lists the
+* **Crypto payouts:** real through NOWPayments once its sign-in details are set (see below).
+* **Not yet done:** card and wallet payments, and payouts to banks and wallets, are simulated. `CLAUDE.md` lists the
   remaining work (Phase 3).
 
 ## Requirements
@@ -113,6 +114,29 @@ simulated, and are refused altogether when `SIMULATE_PROVIDERS=false`.
    `"payments": "nowpayments"`.
 4. To try it without real money, use keys from a separate sandbox account
    (account-sandbox.nowpayments.io) and also set `NOWPAYMENTS_SANDBOX=true`.
+
+## Crypto payouts (NOWPayments)
+
+A seller adds a crypto wallet (USDT TRC-20, USDT ERC-20 or USDC Base) as a payout method. Finance
+verifies the destination (admin panel → Sellers → the seller → Payout destinations), the seller
+requests a payout, a Finance Admin approves it, and a Finance Admin sends it by entering the
+6-digit code from the authenticator app linked to the NOWPayments account. The payout is marked
+paid only when NOWPayments sends a signed notification that the transfer finished. If NOWPayments
+refuses the transfer nothing is sent and it can be sent again; if it does not answer, the funds
+stay reserved until Finance reconciles the payout by hand. Other payout methods stay simulated.
+
+NOWPayments requires all of the following before it accepts payout requests:
+
+1. Two-factor sign-in **with an authenticator app** switched on for the NOWPayments account.
+2. The server's outgoing IP address on the whitelist (Settings → Whitelist). The API needs a fixed
+   outgoing address for this (Railway: static outbound IPs in the service's network settings).
+3. Each seller wallet address on the whitelist too, unless NOWPayments support turns that
+   requirement off for the account.
+4. Enough balance in the NOWPayments custody account in the payout coin.
+
+Then set on the Railway `backend` service: `NOWPAYMENTS_EMAIL` and `NOWPAYMENTS_PASSWORD` (the
+sign-in details of the NOWPayments account; their API requires them for payouts). `/health` then
+reports `"payouts": "nowpayments"`. The two-factor code is never stored.
 
 ## Seller identity verification (Didit)
 

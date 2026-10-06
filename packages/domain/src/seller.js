@@ -2,7 +2,7 @@
 // order archiving. Callers pass the signed-in user; every function checks that the record
 // belongs to that user's store. Fields are copied one by one, never merged from the input.
 import { now } from './clock.js';
-import { DomainError, S } from './fin.js';
+import { DomainError, S, PAYOUT_NETS } from './fin.js';
 import { notify, openCase, activeRestriction } from './logic.js';
 import { SUBS, round2, D } from './data.js';
 
@@ -140,13 +140,18 @@ export function updateStore(d, u, v) {
 }
 export function setStorePaused(d, u, paused) { const st = ownStore(d, u); st.paused = !!paused; }
 // Adding a destination is security-sensitive: the caller must have re-checked the password.
+const hasAddress = (d, sid, address) => (d.payoutMethods[sid] || []).some(m => m.address === address);
 export function addPayoutMethod(d, u, { type, holder, acct, bank, net }) {
   const st = ownStore(d, u);
   if (!['Bank', 'Crypto', 'PayPal', 'Payoneer', 'bKash', 'Nagad', 'UPI'].includes(type)) fail('Choose a method type.', 'validation');
   const a = str(acct, 80); if (!str(holder, 100) || a.length < 6) fail('Enter the account holder and a valid account, wallet or email.', 'validation');
+  // Crypto destinations keep the full address (the transfer needs it) and must match the network.
+  const chain = type === 'Crypto' ? PAYOUT_NETS[net] || fail('Choose a network.', 'validation') : null;
+  if (chain && !chain.address.test(a)) fail(`That is not a valid ${net} wallet address. Check it and paste it again.`, 'validation');
+  if (chain && hasAddress(d, st.id, a)) fail('This wallet address is already one of your payout methods.', 'validation');
   const list = d.payoutMethods[st.id] = d.payoutMethods[st.id] || [];
   if (list.length >= 10) fail('You can keep up to 10 payout methods.');
-  list.push({ id: 'pm' + now(), type, label: `${type === 'Bank' ? (str(bank, 60) || 'Bank') : type === 'Crypto' ? str(net, 40) : type} •••• ${a.slice(-4)}`, holder: str(holder, 100), verified: false });
+  list.push({ id: 'pm' + now(), type, label: `${type === 'Bank' ? (str(bank, 60) || 'Bank') : type === 'Crypto' ? str(net, 40) : type} •••• ${a.slice(-4)}`, holder: str(holder, 100), verified: false, ...(chain ? { net, address: a } : {}) });
   notify(d, u.id, 'seller', `Security: payout destination added (${type}). If this was not you, contact support.`, { page: 's-payouts' });
 }
 

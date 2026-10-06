@@ -12,7 +12,9 @@ import { compose, emailEnabled, processOutbox } from './email.js';
 import { newSecret, verifyCode, otpauthUri, newRecoveryCodes, hashRecovery, encrypt, decrypt } from './totp.js';
 import { config } from './config.js';
 import { currentTerms, paymentProviderEvent } from '@crateline/domain/logic.js';
-import { STATUS as PAY_STATUS } from './payments.js';
+import { STATUS as PAY_STATUS, PAYOUT_STATUS } from './payments.js';
+import { executePayout, payoutNotSent, payoutSent, payoutProviderEvent, need, PAYOUT_NETS } from '@crateline/domain/fin.js';
+import { realPayout } from './actions.js';
 import { kycSessionStarted, kycProviderEvent } from '@crateline/domain/ops.js';
 import { catalogView, customerView, staffView } from './views.js';
 import { customer as CUSTOMER, staff as STAFF } from './actions.js';
@@ -70,7 +72,7 @@ export function createApp(store, { transport = null, storage = null, payments = 
     return rec;
   };
 
-  app.get('/health', wrap(async (req, res) => res.json({ ok: true, store: store.kind, simulateProviders: config.simulateProviders, demoControls: config.allowDemoControls, email: config.emailTransport, files: storage ? config.fileStorage : 'off', payments: payments ? (payments.sandbox ? 'nowpayments-sandbox' : 'nowpayments') : 'simulated', kyc: kyc ? 'didit' : 'simulated', version: (process.env.RAILWAY_GIT_COMMIT_SHA || '').slice(0, 7) || 'local' })));
+  app.get('/health', wrap(async (req, res) => res.json({ ok: true, store: store.kind, simulateProviders: config.simulateProviders, demoControls: config.allowDemoControls, email: config.emailTransport, files: storage ? config.fileStorage : 'off', payments: payments ? (payments.sandbox ? 'nowpayments-sandbox' : 'nowpayments') : 'simulated', payouts: payments?.canPayOut && config.payouts === 'nowpayments' ? 'nowpayments' : 'simulated', kyc: kyc ? 'didit' : 'simulated', version: (process.env.RAILWAY_GIT_COMMIT_SHA || '').slice(0, 7) || 'local' })));
 
   app.get('/api/catalog', wrap(async (req, res) => { const { doc } = await store.read(); res.json(catalogView(doc)); }));
 
@@ -314,11 +316,64 @@ export function createApp(store, { transport = null, storage = null, payments = 
     if (!payments) return res.status(404).json({ error: 'Not found.' });
     const b = req.body;
     if (!payments.verify(b, req.headers['x-nowpayments-sig'])) return res.status(401).json({ error: 'Invalid signature.' });
+    // A payout notification: applies to the payout that created this transfer, and only if it
+    // went to the approved address.
+    if (b.batch_withdrawal_id != null) {
+      const outcome = PAYOUT_STATUS[String(b.status || '').toLowerCase()];
+      if (!outcome) return res.json({ ok: true, result: 'ignored' });
+      const { value } = await store.transact(d => {
+        const p = d.payouts.find(x => x.providerBatch === String(b.batch_withdrawal_id)); if (!p) return 'unknown';
+        try { return payoutProviderEvent(d, { name: payments.name, kind: 'Provider' }, p.id, b.address && b.address !== p.destAddress ? 'unknown' : outcome, b.hash || null); }
+        catch (e) { if (e instanceof DomainError) return 'ignored'; throw e; }
+      });
+      return res.json({ ok: true, result: value });
+    }
     const status = PAY_STATUS[b.payment_status];
     if (!status || b.payment_id == null || typeof b.order_id !== 'string') return res.json({ ok: true, result: 'ignored' });
     const { value } = await store.transact(d => paymentProviderEvent(d, { provider: payments.name, purchaseId: b.order_id, ref: b.payment_id, status,
       priceC: Math.round(Number(b.price_amount) * 100), cur: String(b.price_currency || '').toUpperCase(), paid: `${b.actually_paid ?? b.pay_amount ?? '?'} ${String(b.pay_currency || '').toUpperCase()}` }));
     res.json({ ok: true, result: value });
+  }));
+
+  // ---------- crypto payouts (NOWPayments)
+  // Sending is three steps, each saved before the next: mark the payout Processing (so it can never
+  // be sent twice), create the transfer at the provider, confirm it with the two-factor code.
+  const payoutFor = (d, auth, id) => { const s = auth.kind === 'staff' && actorFrom(d, auth); if (!s) throw new DomainError('Staff only.', 'denied'); need(d, s, 'payouts.execute', 'execute payouts'); const p = d.payouts.find(x => x.id === id); if (!p) throw new DomainError('Payout not found.', 'not_found'); if (!payments?.canPayOut || !realPayout(p)) throw new DomainError('This payout is not sent through NOWPayments.', 'rejected'); return { s, p }; };
+  const codeOf = body => { const c = String(body?.code || '').replace(/\s/g, ''); if (!/^\d{6}$/.test(c)) throw Object.assign(new DomainError('Enter the 6-digit code from the NOWPayments authenticator.', 'validation'), { field: 'code' }); return c; };
+  const settle = (id, auth, outcome) => store.transact(d => payoutProviderEvent(d, actorFrom(d, auth), id, outcome));
+  const confirmCode = async (id, batchId, code, res) => {
+    let ok; try { ok = await payments.verifyPayout(batchId, code); } catch { return res.status(502).json({ error: 'NOWPayments did not answer while checking the code. The transfer exists but may not be confirmed. Enter a new code to try again.' }); }
+    if (!ok) return res.status(422).json({ error: 'NOWPayments did not accept that code. Wait for a new code and enter it. Without a valid code the transfer is rejected after one hour and the funds return to the seller.', field: 'code' });
+    await store.transact(d => payoutSent(d, id, { verified: true }));
+    res.json({ ok: true, status: 'Processing' });
+  };
+  app.post('/api/payouts/:id/execute', auth(), wrap(async (req, res) => {
+    const code = codeOf(req.body); const id = req.params.id;
+    const { value: p } = await store.transact(d => { const { s, p } = payoutFor(d, req.auth, id); if (!PAYOUT_NETS[p.destNet]) throw new DomainError('This payout has no supported network.', 'rejected'); executePayout(d, s, p.id, req.body?.version, payments.name); return structuredClone(p); });
+    let sent;
+    try { sent = await payments.createPayout({ address: p.destAddress, currency: PAYOUT_NETS[p.destNet].ticker, usd: (p.amountC - p.feeC) / 100, ref: p.opRef, description: `Crateline payout ${p.id}`, callbackUrl: config.apiUrl + '/api/webhooks/nowpayments' }); }
+    catch (e) {
+      if (e.refused) { await store.transact(d => payoutNotSent(d, id, e.message)); return res.status(400).json({ error: `NOWPayments refused the transfer: ${e.message} Nothing was sent; the payout is Approved again.` }); }
+      await settle(id, req.auth, 'unknown');
+      return res.status(502).json({ error: 'NOWPayments did not answer, so it is not known whether the transfer was created. The payout now needs reconciliation: check the NOWPayments dashboard before doing anything else. The funds stay reserved.' });
+    }
+    await store.transact(d => payoutSent(d, id, { batchId: sent.batchId, verified: false }));
+    await confirmCode(id, sent.batchId, code, res);
+  }));
+  // A new two-factor code for a transfer that was created but not confirmed.
+  app.post('/api/payouts/:id/verify', auth(), wrap(async (req, res) => {
+    const code = codeOf(req.body); const { doc } = await store.read(); const { p } = payoutFor(doc, req.auth, req.params.id);
+    if (p.status !== 'Processing' || !p.awaitingCode || !p.providerBatch) throw new DomainError('This payout is not waiting for a code.', 'rejected');
+    await confirmCode(p.id, p.providerBatch, code, res);
+  }));
+  // Asks NOWPayments for the transfer's state (for a missed notification) and applies a final one.
+  app.post('/api/payouts/:id/status', auth(), wrap(async (req, res) => {
+    const { doc } = await store.read(); const { p } = payoutFor(doc, req.auth, req.params.id);
+    if (!p.providerBatch) throw new DomainError('NOWPayments never confirmed creating this transfer, so there is nothing to look up here. Check the NOWPayments dashboard for a payout described "Crateline payout ' + p.id + '", then reconcile it by hand.', 'rejected');
+    let st; try { st = await payments.payoutStatus(p.providerBatch); } catch (e) { return res.status(502).json({ error: e.refused ? e.message : 'NOWPayments did not answer. Try again in a minute.' }); }
+    const outcome = PAYOUT_STATUS[st.status];
+    if (outcome && ['Processing', 'Reconciliation required'].includes(p.status) && !(outcome === 'unknown' && p.status === 'Reconciliation required')) await store.transact(d => payoutProviderEvent(d, { name: payments.name, kind: 'Provider' }, p.id, st.address && st.address !== p.destAddress ? 'unknown' : outcome, st.hash));
+    res.json({ ok: true, providerStatus: st.status });
   }));
 
   // ---------- seller identity verification (Didit)

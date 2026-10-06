@@ -365,6 +365,18 @@ export function refundProviderEvent(d, actor, id, outcome) {
 }
 
 // ---------- payouts
+// Crypto payout networks sellers can choose, with the address format each one uses.
+export const PAYOUT_NETS = { 'USDT TRC-20': { ticker: 'usdttrc20', address: /^T[1-9A-HJ-NP-Za-km-z]{33}$/ }, 'USDT ERC-20': { ticker: 'usdterc20', address: /^0x[0-9a-fA-F]{40}$/ }, 'USDC Base': { ticker: 'usdcbase', address: /^0x[0-9a-fA-F]{40}$/ } };
+// Finance confirms a seller's payout destination before it can be used (for crypto: after the
+// address is allowed at the payout provider). Sellers cannot verify their own destinations.
+export function verifyPayoutMethod(d, staff, storeId, methodId, reason) {
+  need(d, staff, 'payouts.approve', 'verify payout destinations');
+  const m = (d.payoutMethods[storeId] || []).find(x => x.id === methodId); if (!m) fail('Payout method not found.', 'not_found');
+  if (m.verified) fail('This destination is already verified.');
+  m.verified = true; m.verifiedBy = staff.name; m.verifiedAt = now();
+  audit(d, staff, 'Payout destination verified', storeId, { reason, after: m.label });
+  cnotify(d, d.stores[storeId].ownerId, 'seller', `Your payout destination ${m.label} is verified. You can now request payouts to it.`, { page: 's-payouts' });
+}
 export function requestPayout(d, user, storeId, methodId, amountC) {
   const st = d.stores[storeId]; const m = (d.payoutMethods[storeId] || []).find(x => x.id === methodId);
   if (st.status !== 'Active') fail('Payouts are available once your store is active.');
@@ -372,7 +384,7 @@ export function requestPayout(d, user, storeId, methodId, amountC) {
   if (!m) fail('Choose a payout method.'); if (!m.verified) fail('This payout destination is not verified yet.');
   if (!(amountC >= S(d).payoutMinC)) fail(`The minimum payout is ${fmtMoney(S(d).payoutMinC)}.`);
   const b = storeBuckets(d, storeId); if (amountC > b.available) fail(`You can withdraw up to ${fmtMoney(b.available)}, your available balance.`);
-  const p = { id: nid(d, 'PAY'), storeId, amountC, feeC: S(d).payoutFeeC, cur: 'USD', method: m.type, methodId, dest: m.label, destVerified: true, status: 'Awaiting approval', requestedAt: now(), version: 1, opRef: 'OP-PO-' + Math.random().toString(36).slice(2, 8).toUpperCase(), attempts: [], provider: d.integrations.find(i => i.payoutMethods?.includes(m.type))?.name || 'Demo payout provider' };
+  const p = { id: nid(d, 'PAY'), storeId, amountC, feeC: S(d).payoutFeeC, cur: 'USD', method: m.type, methodId, dest: m.label, destNet: m.net || null, destAddress: m.address || null, destVerified: true, status: 'Awaiting approval', requestedAt: now(), version: 1, opRef: 'OP-PO-' + Math.random().toString(36).slice(2, 8).toUpperCase(), attempts: [], provider: d.integrations.find(i => i.payoutMethods?.includes(m.type))?.name || 'Demo payout provider' };
   d.payouts.unshift(p);
   mv(d, { store: storeId, payout: p.id, kind: 'Payout reserved', from: 'available', to: 'reserved', amt: amountC });
   const apr = createApproval(d, { type: 'payout', ref: p.id, amountC, requesterId: user.id, requester: `${user.name} (seller)`, title: `Payout ${p.id} for ${st.name}`, reason: 'Seller payout request', before: `Available ${fmtMoney(b.available)}`, after: `Reserve ${fmtMoney(amountC)} to ${m.label}`, requiredAuthority: requiredAuthority(d, 'payout', amountC) });
@@ -392,14 +404,16 @@ export function cancelPayout(d, actor, id, reason, byStaff) {
 export function changePayoutDestination(d, actor, id, methodId) {
   const p = d.payouts.find(x => x.id === id); const m = d.payoutMethods[p.storeId].find(x => x.id === methodId);
   if (!['Awaiting approval', 'Approved'].includes(p.status)) fail('The destination can only change before processing.');
-  const before = p.dest; p.dest = m.label; p.method = m.type; p.methodId = m.id; p.version++; p.status = 'Awaiting approval';
+  const before = p.dest; p.dest = m.label; p.destNet = m.net || null; p.destAddress = m.address || null; p.method = m.type; p.methodId = m.id; p.version++; p.status = 'Awaiting approval';
   const old = d.approvals.find(a => a.id === p.approvalId);
   if (old && ['Pending', 'Approved'].includes(old.status)) { old.status = 'Invalidated'; old.comments.push({ by: 'System', at: now(), text: `Invalidated: destination changed from ${before} to ${m.label}.` }); }
   const apr = createApproval(d, { type: 'payout', ref: p.id, amountC: p.amountC, requesterId: d.stores[p.storeId].ownerId, requester: `${d.users[d.stores[p.storeId].ownerId].name} (seller)`, title: `Payout ${p.id} (destination changed)`, reason: 'Destination changed after submission', before, after: m.label, requiredAuthority: requiredAuthority(d, 'payout', p.amountC), supersedes: old?.id });
   p.approvalId = apr.id;
   audit(d, actor, 'Payout destination changed; approval invalidated', p.id, { before, after: m.label, approval: apr.id });
 }
-export function executePayout(d, staff, id, ver) {
+// `via` names the real payout provider the transfer is about to be sent through; without it the
+// transfer is simulated.
+export function executePayout(d, staff, id, ver, via = null) {
   const p = d.payouts.find(x => x.id === id);
   if (ver != null && p.version !== ver) fail('This payout changed since you opened it. Latest version loaded.', 'stale');
   need(d, staff, 'payouts.execute', 'execute payouts');
@@ -408,22 +422,49 @@ export function executePayout(d, staff, id, ver) {
   if (p.status !== 'Approved') fail(`A payout that is ${p.status.toLowerCase()} cannot be executed. It needs an approved request.`);
   const apr = d.approvals.find(a => a.id === p.approvalId);
   if (!apr || apr.status !== 'Approved' || p.approvalVersion !== p.version) fail('The approval does not match the current version of this payout.');
-  p.status = 'Processing'; p.version++; p.attempts.push({ op: p.opRef, at: now(), by: staff.name, result: 'Transfer sent (simulated)' });
+  p.status = 'Processing'; p.version++; p.sentVia = via; p.attempts.push({ op: p.opRef, at: now(), by: staff.name, result: via ? `Sending through ${via}` : 'Transfer sent (simulated)' });
   audit(d, staff, 'Payout transfer sent', p.id, { approval: p.approvalId, reason: 'Operation ' + p.opRef });
   cnotify(d, d.stores[p.storeId].ownerId, 'seller', `Payout ${p.id} of ${fmtMoney(p.amountC)} is processing.`, { page: 's-payouts' });
 }
-export function payoutProviderEvent(d, actor, id, outcome) {
+// The provider refused the transfer before creating it: nothing was sent, so the payout goes
+// back to Approved (same approval) and can be executed again.
+export function payoutNotSent(d, id, reason) {
+  const p = d.payouts.find(x => x.id === id);
+  if (p.status !== 'Processing' || !p.sentVia || p.providerBatch) fail(`${p.id} cannot be returned to Approved (${p.status}).`);
+  p.attempts[p.attempts.length - 1].result = `Not sent. ${p.sentVia} refused: ${reason}`;
+  p.status = 'Approved'; p.version++; p.approvalVersion = p.version; p.sentVia = null;
+  audit(d, { name: 'System' }, 'Payout transfer not sent', p.id, { reason, outcome: 'Rejected' });
+}
+// The provider created the transfer. `verified` is false while it still waits for the
+// provider's two-factor code; an unverified transfer is rejected by the provider after an hour.
+export function payoutSent(d, id, { batchId, verified }) {
+  const p = d.payouts.find(x => x.id === id);
+  if (batchId) p.providerBatch = String(batchId);
+  p.awaitingCode = !verified; p.version++;
+  p.attempts[p.attempts.length - 1].result = verified ? `Transfer accepted by ${p.sentVia} (batch ${p.providerBatch})` : `Created at ${p.sentVia} (batch ${p.providerBatch}); waiting for the two-factor code`;
+}
+// A payout whose result is unknown, settled by Finance after checking the provider's own records.
+export function reconcilePayout(d, staff, id, outcome, ref, reason) {
+  need(d, staff, 'payments.reconcile', 'reconcile payouts');
+  const p = d.payouts.find(x => x.id === id); if (!p) fail('Payout not found.', 'not_found');
+  if (p.status !== 'Reconciliation required') fail(`${p.id} is ${p.status.toLowerCase()}; only a payout with an unknown result can be reconciled.`);
+  if (!['paid', 'not_sent'].includes(outcome)) fail('Choose whether the provider shows the transfer as paid or not sent.', 'validation');
+  if (outcome === 'paid' && !ref) fail('Enter the provider reference or transaction hash of the transfer.', 'validation');
+  audit(d, staff, 'Payout reconciled by hand', p.id, { reason, after: outcome === 'paid' ? `Paid, reference ${ref}` : 'Not sent' });
+  return payoutProviderEvent(d, staff, id, outcome === 'paid' ? 'success' : 'failure', ref || null);
+}
+export function payoutProviderEvent(d, actor, id, outcome, ref = null) {
   const p = d.payouts.find(x => x.id === id); const owner = d.stores[p.storeId].ownerId;
   if (d.processedOps.includes(p.opRef)) { d.events.unshift({ id: nid(d, 'EV'), at: now(), op: p.opRef, ref: p.id, result: 'Duplicate event ignored. Already processed; no financial effect.' }); audit(d, actor, 'Duplicate provider event ignored', p.id, { reason: p.opRef, outcome: 'Ignored' }); return 'duplicate'; }
   if (!['Processing', 'Reconciliation required'].includes(p.status)) fail(`No transfer is outstanding for ${p.id} (${p.status}).`);
   d.events.unshift({ id: nid(d, 'EV'), at: now(), op: p.opRef, ref: p.id, result: outcome });
   if (outcome === 'success') {
-    d.processedOps.push(p.opRef); p.status = 'Paid'; p.paidAt = now(); p.version++; p.providerRef = 'TRF-' + p.id.slice(4) + 'X';
+    d.processedOps.push(p.opRef); p.status = 'Paid'; p.paidAt = now(); p.version++; p.awaitingCode = false; p.providerRef = ref || 'TRF-' + p.id.slice(4) + 'X';
     mv(d, { store: p.storeId, payout: p.id, kind: 'Payout paid', from: 'reserved', to: 'paidOut', amt: p.amountC });
     cnotify(d, owner, 'seller', `Payout ${p.id} of ${fmtMoney(p.amountC)} paid to ${p.dest}.`, { page: 's-payouts' });
     audit(d, actor, 'Payout paid', p.id, { after: 'Paid' });
   } else if (outcome === 'failure') {
-    d.processedOps.push(p.opRef); p.status = 'Failed'; p.version++;
+    d.processedOps.push(p.opRef); p.status = 'Failed'; p.version++; p.awaitingCode = false;
     mv(d, { store: p.storeId, payout: p.id, kind: 'Payout failed, funds released', from: 'reserved', to: 'available', amt: p.amountC });
     cnotify(d, owner, 'seller', `Payout ${p.id} failed. ${fmtMoney(p.amountC)} returned to your available balance.`, { page: 's-payouts' });
     audit(d, actor, 'Payout failed', p.id, { outcome: 'Failed' });

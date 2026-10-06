@@ -156,7 +156,21 @@ Super Admins time travel, provider outcomes (`/api/demo/scenario`) and reset whi
    without a real provider are refused. Not yet tried against the real or sandbox NOWPayments API.
    Still to do: a job that queries NOWPayments for purchases left Pending (missed notifications),
    refunds of crypto payments (manual at the provider today), a card provider (none chosen).
-5. Payout provider and reconciliation jobs (NOWPayments mass payouts): not started.
+5. Payout provider. **Crypto done:** NOWPayments mass payouts (`backend/src/payments.js`), on
+   when `NOWPAYMENTS_EMAIL` and `NOWPAYMENTS_PASSWORD` are also set. Crypto payout methods keep
+   the full address and network (`PAYOUT_NETS`); Finance verifies a destination
+   (`verifyPayoutMethod`, `payouts.approve`); the address is copied onto the payout at request.
+   `POST /api/payouts/:id/execute` (`payouts.execute`, body `{ version, code }`) saves each step
+   before the next: `executePayout(..., 'NOWPayments')` marks it Processing, the transfer is
+   created, then confirmed with the two-factor code Finance typed (never stored). Refused by the
+   provider -> `payoutNotSent` (Approved again); no answer -> Reconciliation required;
+   wrong code -> `awaitingCode`, retried through `/verify`. Signed payout notifications on
+   `/api/webhooks/nowpayments` and `POST /api/payouts/:id/status` call `payoutProviderEvent`
+   (finished = paid, rejected = failed and released, failed or another address = unknown).
+   `reconcilePayout` (`payments.reconcile`) settles an unknown result by hand. The simulated
+   execute and result actions refuse these payouts. Not yet tried against the real API.
+   Still to do: reconciliation jobs, other payout methods (simulated; refused when
+   `SIMULATE_PROVIDERS=false`).
    KYC for seller verification. **Done:** Didit (`backend/src/kyc.js`, API v3). With
    `DIDIT_API_KEY`, `DIDIT_WEBHOOK_SECRET` and `DIDIT_WORKFLOW_ID` set, `applyAsSeller` takes no
    documents and leaves `checks.identity` open with `verification.kyc`. `POST /api/kyc/start`

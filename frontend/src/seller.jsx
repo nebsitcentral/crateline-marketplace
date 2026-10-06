@@ -8,7 +8,7 @@ import { Deliveries, ReasonModal } from './buyer.jsx';
 import { apiEnabled, api } from './api.js';
 import * as SL from '@crateline/domain/seller.js';
 import * as A from '@crateline/domain/actions.js';
-import { fmtMoney, toC, pct, orderBuckets, requestPayout, cancelPayout, DomainError } from '@crateline/domain/fin.js';
+import { fmtMoney, toC, pct, orderBuckets, requestPayout, cancelPayout, DomainError, PAYOUT_NETS } from '@crateline/domain/fin.js';
 const { useState, useEffect, useMemo } = React;
 
 // ---------- Onboarding
@@ -455,6 +455,7 @@ function AddMethod({ sid, onClose }) {
   const s = k => e => setV({ ...v, [k]: e.target.value });
   async function save() {
     if (!v.holder.trim() || v.acct.trim().length < 6) return setErr('Enter the account holder and a valid account, wallet or email.');
+    if (type === 'Crypto' && !PAYOUT_NETS[v.net].address.test(v.acct.trim())) return setErr(`That is not a valid ${v.net} wallet address. Check it and paste it again.`);
     if (!v.pw) return setErr('Re-enter your password to confirm this change.');
     const method = { type, holder: v.holder, acct: v.acct, bank: v.bank, net: v.net };
     if (apiEnabled) {
@@ -462,14 +463,14 @@ function AddMethod({ sid, onClose }) {
       setBusy(true); setErr('');
       try { await api.addPayoutMethod({ ...method, password: v.pw }); await refresh(); } catch (x) { setBusy(false); return setErr(x.message); }
     } else if (!update(d => { SL.addPayoutMethod(d, d.users[me.id], method); return true; })) return;
-    toast('Method added. Verification pending (simulated)'); onClose();
+    toast(apiEnabled ? 'Method added. The finance team verifies it before you can use it.' : 'Method added. Verification pending (simulated)'); onClose();
   }
   return <Modal title="Add payout method" onClose={onClose} footer={<><Btn v="ghost" onClick={onClose}>Cancel</Btn><Btn v="primary" onClick={save} disabled={busy}>Add method</Btn></>}>
     <Field label="Method"><select value={type} onChange={e => setType(e.target.value)}>{PM_TYPES.map(x => <option key={x}>{x}</option>)}</select></Field>
     <Field label="Account holder"><input value={v.holder} onChange={s('holder')} /></Field>
     {type === 'Bank' && <Field label="Bank name"><input value={v.bank} onChange={s('bank')} /></Field>}
-    {type === 'Crypto' && <Field label="Network"><select value={v.net} onChange={s('net')}>{['USDT TRC-20', 'USDT ERC-20', 'USDC Base'].map(x => <option key={x}>{x}</option>)}</select></Field>}
-    <Field label={type === 'Bank' ? 'Account number or IBAN' : type === 'Crypto' ? 'Wallet address' : type === 'PayPal' || type === 'Payoneer' ? 'Account email' : type === 'UPI' ? 'UPI ID' : 'Wallet number'} hint="Masked after saving"><input value={v.acct} onChange={s('acct')} /></Field>
+    {type === 'Crypto' && <Field label="Network"><select value={v.net} onChange={s('net')}>{Object.keys(PAYOUT_NETS).map(x => <option key={x}>{x}</option>)}</select></Field>}
+    <Field label={type === 'Bank' ? 'Account number or IBAN' : type === 'Crypto' ? 'Wallet address' : type === 'PayPal' || type === 'Payoneer' ? 'Account email' : type === 'UPI' ? 'UPI ID' : 'Wallet number'} hint={type === 'Crypto' ? 'Paste the full address. A payout sent to a wrong address or network cannot be recovered.' : 'Masked after saving'}><input value={v.acct} onChange={s('acct')} /></Field>
     <Field label="Confirm with your password" hint="Recent authentication is required for payout changes"><input type="password" value={v.pw} onChange={s('pw')} /></Field>
     {err && <p className="ferr">{err}</p>}</Modal>;
 }

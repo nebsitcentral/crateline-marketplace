@@ -30,7 +30,9 @@ export const config = {
   apiUrl: (env.API_URL || (env.RAILWAY_PUBLIC_DOMAIN ? 'https://' + env.RAILWAY_PUBLIC_DOMAIN : `http://localhost:${Number(env.PORT) || 4000}`)).replace(/\/$/, ''),
   // Crypto payments through NOWPayments. Needs the API key and the IPN secret (Payments settings >
   // Instant payment notifications). NOWPAYMENTS_SANDBOX=true uses their sandbox with sandbox keys.
-  nowpayments: { apiKey: env.NOWPAYMENTS_API_KEY || '', ipnSecret: env.NOWPAYMENTS_IPN_SECRET || '', sandbox: bool(env.NOWPAYMENTS_SANDBOX, false) },
+  // Payouts also need the account's sign-in email and password (NOWPayments requires them for
+  // payout requests). The two-factor code is typed by Finance for each payout, never stored.
+  nowpayments: { apiKey: env.NOWPAYMENTS_API_KEY || '', ipnSecret: env.NOWPAYMENTS_IPN_SECRET || '', sandbox: bool(env.NOWPAYMENTS_SANDBOX, false), email: env.NOWPAYMENTS_EMAIL || '', password: env.NOWPAYMENTS_PASSWORD || '' },
   // Seller identity verification through Didit: API key, webhook secret and the workflow to run
   // (all three from the Didit console).
   didit: { apiKey: env.DIDIT_API_KEY || '', webhookSecret: env.DIDIT_WEBHOOK_SECRET || '', workflowId: env.DIDIT_WORKFLOW_ID || '' },
@@ -42,6 +44,8 @@ config.fileStorage = env.FILE_STORAGE || (Object.values(config.r2).every(Boolean
 config.payments = env.PAYMENTS || (config.nowpayments.apiKey && config.nowpayments.ipnSecret ? 'nowpayments' : 'simulated');
 // 'didit': sellers verify their identity with Didit. 'simulated': placeholder documents and demo checks.
 config.kyc = env.KYC || (Object.values(config.didit).every(Boolean) ? 'didit' : 'simulated');
+// 'nowpayments': crypto payouts are real transfers. 'simulated': every payout is simulated.
+config.payouts = env.PAYOUTS || (config.payments === 'nowpayments' && config.nowpayments.email && config.nowpayments.password ? 'nowpayments' : 'simulated');
 
 export function assertConfig() {
   const missing = [];

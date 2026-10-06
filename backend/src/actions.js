@@ -31,6 +31,8 @@ const invalid = (msg, name) => { throw Object.assign(new DomainError(msg, 'valid
 const str = (v, name, min = 1) => { if (typeof v !== 'string' || !v.trim()) invalid(`${name} is required.`, name); if (v.trim().length < min) invalid(`${name} needs at least ${min} characters.`, name); return v.trim(); };
 const int = (v, name) => { if (!Number.isInteger(v) || v <= 0) invalid(`${name} must be a positive whole number.`, name); return v; };
 const sim = () => { if (!config.simulateProviders) fail('Simulated provider events are disabled on this server.', 'denied'); };
+// A payout that is sent as a real transfer: a crypto destination with payouts connected.
+export const realPayout = p => config.payouts === 'nowpayments' && p.method === 'Crypto' && !!p.destAddress;
 const CRYPTO_NETS = ['USDT on Tron (TRC-20)', 'USDT on Ethereum (ERC-20)', 'USDC on Base'];
 // An attachment. With file storage on, it must be a file this customer uploaded (POST /api/files)
 // and has not attached before; `kind` records where it went, which decides who may download it.
@@ -207,10 +209,13 @@ export const staff = {
     F.decideApproval(d, s, a.approvalId, a.decision, a.reason, a.version);
   },
   executeRefund: (d, s, a) => F.executeRefund(d, s, a.refundId, a.version),
-  executePayout: (d, s, a) => F.executePayout(d, s, a.payoutId, a.version),
+  // Simulated transfer. Real (crypto) transfers go through POST /api/payouts/:id/execute.
+  executePayout: (d, s, a) => { const p = found(d.payouts, a.payoutId, 'Payout'); if (realPayout(p)) fail('This payout is sent through NOWPayments. Use "Send with NOWPayments" and enter the two-factor code.'); if (!config.simulateProviders) fail(`No payout provider is connected for ${p.method} payouts yet.`); return F.executePayout(d, s, p.id, a.version); },
+  verifyPayoutMethod: (d, s, a) => F.verifyPayoutMethod(d, s, found(Object.values(d.stores), a.storeId, 'Store').id, a.methodId, str(a.reason, 'Reason')),
+  reconcilePayout: (d, s, a) => F.reconcilePayout(d, s, a.payoutId, a.outcome, typeof a.ref === 'string' ? a.ref.trim().slice(0, 200) : '', str(a.reason, 'Reason')),
   cancelPayout: (d, s, a) => F.cancelPayout(d, s, a.payoutId, str(a.reason, 'Reason'), true),
   refundProviderEvent: (d, s, a) => { sim(); return F.refundProviderEvent(d, s, a.refundId, a.outcome); },
-  payoutProviderEvent: (d, s, a) => { sim(); return F.payoutProviderEvent(d, s, a.payoutId, a.outcome); },
+  payoutProviderEvent: (d, s, a) => { sim(); const p = found(d.payouts, a.payoutId, 'Payout'); if (p.sentVia) fail(`Only ${p.sentVia} can report the result of this transfer.`, 'denied'); return F.payoutProviderEvent(d, s, p.id, a.outcome); },
   restrictUser: (d, s, a) => O.restrictUser(d, s, a.userId, { scope: a.scope, reason: str(a.reason, 'Reason'), days: a.days, notice: a.notice }),
   restoreUser: (d, s, a) => O.restoreUser(d, s, a.userId, a.restrictionId, str(a.reason, 'Reason')),
   sellerRequestInfo: (d, s, a) => O.sellerRequestInfo(d, s, a.storeId, a.fields || [], str(a.message, 'Message'), str(a.reason, 'Reason'), a.version),

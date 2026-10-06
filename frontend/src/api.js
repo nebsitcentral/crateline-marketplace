@@ -59,6 +59,10 @@ export const api = {
   // Seller identity verification: { url } of the provider's page; refresh reads the latest result.
   kycStart: () => call('/api/kyc/start', { method: 'POST' }),
   kycRefresh: () => call('/api/kyc/refresh', { method: 'POST' }),
+  // Crypto payouts (staff): send with the provider's two-factor code, re-enter a code, ask for the status.
+  sendPayout: (id, version, code) => call(`/api/payouts/${id}/execute`, { method: 'POST', body: { version, code } }),
+  confirmPayout: (id, code) => call(`/api/payouts/${id}/verify`, { method: 'POST', body: { code } }),
+  payoutStatus: id => call(`/api/payouts/${id}/status`, { method: 'POST' }),
   fileUrl: id => call(`/api/files/${id}/url`),
   addPayoutMethod: body => call('/api/payout-methods', { method: 'POST', body }),
   // Demo controls: Super Admin only, and only while the server allows them (ALLOW_DEMO_CONTROLS).
