@@ -19,7 +19,8 @@ Seller panel, and Admin and Super Admin management panels.
 * **Connected:** with `VITE_API_URL` set, every screen reads and writes through the API. Email
   (Brevo), two-factor sign-in and file storage (Cloudflare R2) are real once their keys are set.
 * **Crypto payments:** real through NOWPayments once its keys are set (see below).
-* **Not yet done:** card and wallet payments, payouts and KYC are simulated. `CLAUDE.md` lists the
+* **Seller identity checks:** real through Didit once its keys are set (see below).
+* **Not yet done:** card and wallet payments and payouts are simulated. `CLAUDE.md` lists the
   remaining work (Phase 3).
 
 ## Requirements
@@ -112,6 +113,22 @@ simulated, and are refused altogether when `SIMULATE_PROVIDERS=false`.
    `"payments": "nowpayments"`.
 4. To try it without real money, use keys from a separate sandbox account
    (account-sandbox.nowpayments.io) and also set `NOWPAYMENTS_SANDBOX=true`.
+
+## Seller identity verification (Didit)
+
+With the keys set, a new seller applies as before and is then sent to Didit to photograph an ID
+and take a selfie. Crateline never receives the documents: it reads the result from Didit and
+stores the outcome, verified name, date of birth, document type and issuing country. A passed check
+completes the "identity" check (and "sanctions" if the workflow includes AML screening); a
+Verification Admin still approves the store. Stores that applied before Didit are unaffected.
+
+1. Didit console → **Workflows**: create or pick the workflow sellers go through (ID document +
+   liveness + face match; add AML screening if you want the sanctions check filled in). Copy its id.
+2. **API & Webhooks**: copy the API key. Add the webhook address
+   `https://<your API domain>/api/webhooks/didit` and copy the webhook secret key.
+3. Set on the Railway `backend` service: `DIDIT_API_KEY`, `DIDIT_WEBHOOK_SECRET`,
+   `DIDIT_WORKFLOW_ID` (and `APP_URL`, where sellers return to). `/health` then reports
+   `"kyc": "didit"`.
 
 ## Deploy the frontend to GitHub Pages
 

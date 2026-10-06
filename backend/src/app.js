@@ -13,6 +13,7 @@ import { newSecret, verifyCode, otpauthUri, newRecoveryCodes, hashRecovery, encr
 import { config } from './config.js';
 import { currentTerms, paymentProviderEvent } from '@crateline/domain/logic.js';
 import { STATUS as PAY_STATUS } from './payments.js';
+import { kycSessionStarted, kycProviderEvent } from '@crateline/domain/ops.js';
 import { catalogView, customerView, staffView } from './views.js';
 import { customer as CUSTOMER, staff as STAFF } from './actions.js';
 import { seedStore } from './seed.js';
@@ -26,7 +27,7 @@ const newToken = () => crypto.randomBytes(32).toString('base64url');
 const hashToken = t => crypto.createHash('sha256').update(String(t)).digest('hex');
 const HOUR_MS = 3600e3;
 
-export function createApp(store, { transport = null, storage = null, payments = null } = {}) {
+export function createApp(store, { transport = null, storage = null, payments = null, kyc = null } = {}) {
   // Deliver queued email soon after a request queues it; the interval worker in index.js retries.
   let sending = null;
   const kick = () => { if (transport && !sending) sending = processOutbox(store, transport).catch(e => console.error('email send failed', e)).finally(() => { sending = null; }); };
@@ -69,7 +70,7 @@ export function createApp(store, { transport = null, storage = null, payments = 
     return rec;
   };
 
-  app.get('/health', wrap(async (req, res) => res.json({ ok: true, store: store.kind, simulateProviders: config.simulateProviders, demoControls: config.allowDemoControls, email: config.emailTransport, files: storage ? config.fileStorage : 'off', payments: payments ? (payments.sandbox ? 'nowpayments-sandbox' : 'nowpayments') : 'simulated', version: (process.env.RAILWAY_GIT_COMMIT_SHA || '').slice(0, 7) || 'local' })));
+  app.get('/health', wrap(async (req, res) => res.json({ ok: true, store: store.kind, simulateProviders: config.simulateProviders, demoControls: config.allowDemoControls, email: config.emailTransport, files: storage ? config.fileStorage : 'off', payments: payments ? (payments.sandbox ? 'nowpayments-sandbox' : 'nowpayments') : 'simulated', kyc: kyc ? 'didit' : 'simulated', version: (process.env.RAILWAY_GIT_COMMIT_SHA || '').slice(0, 7) || 'local' })));
 
   app.get('/api/catalog', wrap(async (req, res) => { const { doc } = await store.read(); res.json(catalogView(doc)); }));
 
@@ -318,6 +319,37 @@ export function createApp(store, { transport = null, storage = null, payments = 
     const { value } = await store.transact(d => paymentProviderEvent(d, { provider: payments.name, purchaseId: b.order_id, ref: b.payment_id, status,
       priceC: Math.round(Number(b.price_amount) * 100), cur: String(b.price_currency || '').toUpperCase(), paid: `${b.actually_paid ?? b.pay_amount ?? '?'} ${String(b.pay_currency || '').toUpperCase()}` }));
     res.json({ ok: true, result: value });
+  }));
+
+  // ---------- seller identity verification (Didit)
+  const myVerification = (doc, auth) => { const u = auth.kind === 'user' && actorFrom(doc, auth); const vr = u?.storeId && doc.verifications.find(v => v.storeId === u.storeId); if (!kyc || !vr?.kyc) throw new DomainError('Identity verification is not available for this account.', 'rejected'); return vr; };
+  const applyDecision = async (storeId, sessionId) => { const dec = await kyc.decision(sessionId); const { value } = await store.transact(d => kycProviderEvent(d, { provider: kyc.name, storeId, sessionId, status: dec.status, result: dec.result })); return value; };
+  // Opens (or reopens) the seller's verification page at the provider.
+  app.post('/api/kyc/start', authLimiter, auth(), wrap(async (req, res) => {
+    const { doc } = await store.read(); const vr = myVerification(doc, req.auth);
+    if (vr.kyc.status === 'Approved') throw new DomainError('Your identity is already verified.', 'rejected');
+    if (vr.kyc.status === 'In Review') throw new DomainError('Your identity check is being reviewed. You will be notified of the result.', 'rejected');
+    if (!['Verification pending', 'More information required'].includes(vr.state)) throw new DomainError(`This application is ${vr.state.toLowerCase()}.`, 'rejected');
+    if (vr.kyc.url && ['Not Started', 'In Progress', 'Awaiting User'].includes(vr.kyc.status)) return res.json({ url: vr.kyc.url });
+    const s = await kyc.createSession({ storeId: vr.storeId, returnUrl: `${config.appUrl}/?kyc=1` });
+    await store.transact(d => kycSessionStarted(d, vr.storeId, { provider: kyc.name, sessionId: s.id, url: s.url }));
+    res.json({ url: s.url });
+  }));
+  // The seller is back from the provider: read the result now instead of waiting for the webhook.
+  app.post('/api/kyc/refresh', authLimiter, auth(), wrap(async (req, res) => {
+    const { doc } = await store.read(); const vr = myVerification(doc, req.auth);
+    if (!vr.kyc.sessionId) return res.json({ status: vr.kyc.status });
+    await applyDecision(vr.storeId, vr.kyc.sessionId);
+    res.json({ status: (await store.read()).doc.verifications.find(v => v.id === vr.id).kyc.status });
+  }));
+  // Signed notifications from Didit. The webhook only says which session changed; the outcome is
+  // read from Didit's API, and applies only to the store that session was opened for.
+  app.post('/api/webhooks/didit', wrap(async (req, res) => {
+    if (!kyc) return res.status(404).json({ error: 'Not found.' });
+    const b = req.body;
+    if (!kyc.verify(b, req.headers)) return res.status(401).json({ error: 'Invalid signature.' });
+    if (typeof b.session_id !== 'string' || typeof b.vendor_data !== 'string' || !['status.updated', 'data.updated'].includes(b.webhook_type)) return res.json({ ok: true, result: 'ignored' });
+    res.json({ ok: true, result: await applyDecision(b.vendor_data, b.session_id) });
   }));
 
   // ---------- files (deliveries, evidence, message attachments)

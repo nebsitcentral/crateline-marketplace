@@ -32,6 +32,7 @@ backend/src/           Express API
   views.js             What each caller may read (server-side filtering)
   files.js             File storage on Cloudflare R2: signed upload and download URLs
   payments.js          NOWPayments: hosted invoices and signed notification (IPN) checks
+  kyc.js               Didit: seller identity sessions, decisions and signed webhook checks
   store.js             Memory store (dev, tests) or Postgres store (one versioned JSON document)
   migrate.js seed.js   Tables and demo fixtures
 backend/test/          node:test suites (domain rules and HTTP API)
@@ -155,8 +156,17 @@ Super Admins time travel, provider outcomes (`/api/demo/scenario`) and reset whi
    without a real provider are refused. Not yet tried against the real or sandbox NOWPayments API.
    Still to do: a job that queries NOWPayments for purchases left Pending (missed notifications),
    refunds of crypto payments (manual at the provider today), a card provider (none chosen).
-5. Payout provider and reconciliation jobs (NOWPayments mass payouts). KYC provider for seller
-   verification (Didit).
+5. Payout provider and reconciliation jobs (NOWPayments mass payouts): not started.
+   KYC for seller verification. **Done:** Didit (`backend/src/kyc.js`, API v3). With
+   `DIDIT_API_KEY`, `DIDIT_WEBHOOK_SECRET` and `DIDIT_WORKFLOW_ID` set, `applyAsSeller` takes no
+   documents and leaves `checks.identity` open with `verification.kyc`. `POST /api/kyc/start`
+   opens the hosted session (`vendor_data` = store id); `POST /api/webhooks/didit` (X-Signature-V2
+   or -Simple, 5-minute timestamp) and `POST /api/kyc/refresh` both read the decision from Didit's
+   API and call `kycProviderEvent` (`ops.js`), which only applies to the store's current session.
+   Approved completes the identity check (and sanctions when AML is Approved); it never approves
+   the store, and staff cannot mark identity by hand. Staff never get the session link; verified
+   fields need `sellers.evidence`. Not yet tried against the real Didit API. Still to do: business
+   (KYB) checks, proof of address, re-verification of existing sellers.
 6. Approved legal text for policies; confirm the Section 20 business decisions.
 
 ## Testing expectations

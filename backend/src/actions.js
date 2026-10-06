@@ -179,7 +179,7 @@ export const customer = {
   requestDeletion: (d, u) => A.requestDeletion(d, u, O.closureBlockers(d, u.id)),
   withdrawDeletion: (d, u) => A.withdrawDeletion(d, u),
   // Seller tools (payout destinations use POST /api/payout-methods, which re-checks the password)
-  applyAsSeller: (d, u, a) => ({ storeId: SL.applyAsSeller(d, u, a) }),
+  applyAsSeller: (d, u, a) => ({ storeId: SL.applyAsSeller(d, u, a, { kyc: config.kyc === 'didit' ? 'Didit' : null }) }),
   saveListing: (d, u, a) => SL.saveListing(d, u, a.listingId || null, a.listing || {}, !!a.publish),
   setListingAvailability: (d, u, a) => SL.setListingAvailability(d, u, a.ids, a.availability),
   deleteDraftListing: (d, u, a) => SL.deleteDraftListing(d, u, a.listingId),

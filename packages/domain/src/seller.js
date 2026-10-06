@@ -21,7 +21,9 @@ function ownListing(d, u, id) {
 }
 
 // ---------- seller application
-export function applyAsSeller(d, u, v) {
+// `kyc` names the identity verification provider when one is connected: the seller then verifies
+// with the provider after applying, and no documents are attached here.
+export function applyAsSeller(d, u, v, { kyc = null } = {}) {
   if (u.storeId) fail('You already have a store.');
   if (activeRestriction(u, 'selling')) fail('Selling is restricted on your account.', 'denied');
   const name = str(v.name, 100), store = str(v.store, 60), desc = str(v.desc, 2000);
@@ -34,19 +36,20 @@ export function applyAsSeller(d, u, v) {
   if (desc.length < 20) fail('Describe your store in at least 20 characters.', 'validation');
   if (!str(v.city, 80) || !str(v.addr, 200)) fail('Enter your business address.', 'validation');
   const docs = (Array.isArray(v.docs) ? v.docs : []).slice(0, 5).map(f => ({ name: str(f?.name, 200) + ' (PLACEHOLDER)', size: Math.max(0, Number(f?.size) || 0) }));
-  if (!docs.length) fail('Add your identity document.', 'validation');
+  if (!docs.length && !kyc) fail('Add your identity document.', 'validation');
   const cat = d.categories.some(c => c.id === v.cat) ? v.cat : SUBS[types[0]].cat;
   const id = 'st_' + store.toLowerCase().replace(/\W+/g, '').slice(0, 12) + (now() % 1000);
   d.stores[id] = { id, ownerId: u.id, name: store, tagline: desc.slice(0, 60), cat, hue: 200, status: 'Verification pending', paused: false, joined: now(), completedBase: 0, country: str(v.country, 60), description: desc, replacementTerms: 'Replacement within 7 days for items that fail the stated checks.', image: null, types };
   u.storeId = id;
   d.seq.VR = d.seq.VR || 1;
   d.verifications.unshift({ id: 'VR-' + d.seq.VR++, storeId: id, version: 1, submittedAt: now(), state: 'Verification pending',
-    identity: { name, dob: v.dob, country: str(v.country, 60), document: str(v.doc, 60) + ' (placeholder, not uploaded)' },
+    identity: { name, dob: v.dob, country: str(v.country, 60), document: kyc ? `Checked by ${kyc}` : str(v.doc, 60) + ' (placeholder, not uploaded)' },
     business: { name: store, address: `${str(v.addr, 200)}, ${str(v.city, 80)}, ${str(v.country, 60)}`, registration: '' },
     // The email check reflects whether the account's email is verified; it is not taken from the form.
-    checks: { email: !!u.emailVerified, identity: true, address: true, sanctions: false }, evidence: docs, decisions: [], missing: [] });
+    checks: { email: !!u.emailVerified, identity: !kyc, address: true, sanctions: false }, evidence: kyc ? [] : docs, decisions: [], missing: [],
+    ...(kyc ? { kyc: { provider: kyc, status: 'Not started', sessionId: null, url: null, at: now(), result: null } } : {}) });
   d.payoutMethods[id] = []; d.payoutSettings[id] = { threshold: 50, schedule: 'Manual' };
-  notify(d, u.id, 'seller', 'Identity verification submitted. You can prepare draft listings while it is reviewed.', { page: 's-overview' });
+  notify(d, u.id, 'seller', kyc ? `Application submitted. Verify your identity with ${kyc} to continue.` : 'Identity verification submitted. You can prepare draft listings while it is reviewed.', { page: kyc ? 's-onboarding' : 's-overview' });
   if (d.onboarding) delete d.onboarding[u.id];
   return id;
 }

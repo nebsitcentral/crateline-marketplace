@@ -14,8 +14,10 @@ const { useState, useEffect, useMemo } = React;
 // ---------- Onboarding
 const STEPS = ['Personal details', 'Store', 'Identity', 'Review', 'Status'];
 export function Onboarding() {
-  const { db, me, update, nav, switchMode, toast, perform } = useApp();
+  const { db, me, update, nav, switchMode, toast, perform, kycMode } = useApp();
   const st = me.storeId && db.stores[me.storeId];
+  // With a verification provider connected, identity is checked on its page after applying.
+  const live = apiEnabled && kycMode === 'didit';
   // Draft progress: on the server in demo mode; in API mode only in this browser (it holds identity details).
   const DRAFT = 'crateline-onboarding-' + me.id;
   const saved = apiEnabled ? (() => { try { return JSON.parse(localStorage.getItem(DRAFT)); } catch { return null; } })() : db.onboarding?.[me.id];
@@ -28,7 +30,7 @@ export function Onboarding() {
     const e = {};
     if (step === 0) { if (v.name.trim().length < 2) e.name = 'Enter your full legal name.'; if (!apiEnabled && !v.verified) e.code = 'Verify your email to continue.'; if (!v.dob) e.dob = 'Enter your date of birth.'; else if ((now() - new Date(v.dob)) / (365.25 * D) < 18) e.dob = 'Sellers must be 18 or older (placeholder rule, to be confirmed).'; }
     if (step === 1) { if (v.store.trim().length < 3) e.store = 'Store name needs at least 3 characters.'; else if (Object.values(db.stores).some(x => x.name.toLowerCase() === v.store.trim().toLowerCase())) e.store = 'That store name is taken.'; if (!v.types.length) e.types = 'Choose at least one product type.'; if (v.desc.trim().length < 20) e.desc = 'Describe your store in at least 20 characters.'; if (!v.city.trim() || !v.addr.trim()) e.addr = 'Enter your business address.'; }
-    if (step === 2) { if (v.docs.length < 1) e.docs = 'Add your identity document.'; }
+    if (step === 2 && !live) { if (v.docs.length < 1) e.docs = 'Add your identity document.'; }
     setErr(e); if (Object.keys(e).length) return;
     setStep(step + 1); persist(v, step + 1);
   }
@@ -61,14 +63,17 @@ export function Onboarding() {
         <div className="form-grid"><Field label="Country"><select value={v.country} onChange={s('country')}>{['Bangladesh', 'United States', 'United Kingdom', 'United Arab Emirates', 'Saudi Arabia', 'India'].map(x => <option key={x}>{x}</option>)}</select></Field>
           <Field label="City" required><input value={v.city} onChange={s('city')} /></Field></div>
         <Field label="Business address" required error={err.addr} hint="Private. Not shown on your public store."><input value={v.addr} onChange={s('addr')} /></Field></>}
-      {step === 2 && <><h2>Identity verification</h2>
+      {step === 2 && live && <><h2>Identity verification</h2>
+        <Notice tone="info" title="You verify your identity after you submit">The check is done by Didit, our identity verification provider. You will need a government ID (passport, national ID card or driving licence) and a device with a camera for a short selfie check. It takes about two minutes.</Notice>
+        <p className="xs muted">Your documents go to Didit, not to Crateline. We receive only the result, your verified name, date of birth, document type and issuing country.</p></>}
+      {step === 2 && !live && <><h2>Identity verification</h2>
         <Notice tone="warn" title="Simulated verification">No documents are uploaded or checked. Document types, provider and criteria are open decisions.</Notice>
         <Field label="Document type"><select value={v.doc} onChange={s('doc')}>{['National ID card', 'Passport', 'Driving licence'].map(x => <option key={x}>{x}</option>)}</select></Field>
         <FilePicker files={v.docs} setFiles={fn => setV(x => ({ ...x, docs: typeof fn === 'function' ? fn(x.docs) : fn }))} label="Add document image" />
         {err.docs && <p className="ferr">{err.docs}</p>}
         <p className="xs muted">Identity documents are stored privately, separate from product images, and only the verification process can access them.</p></>}
       {step === 3 && <><h2>Review and submit</h2>
-        <KV items={[['Name', v.name], ['Email', v.email + ' (verified)'], ['Date of birth', v.dob], ['Store', v.store], ['Category', CATEGORIES.find(c => c.id === v.cat).name], ['Product types', v.types.map(t => SUBS[t].name).join(', ')], ['Address', `${v.addr}, ${v.city}, ${v.country}`], ['Identity document', `${v.doc} · ${v.docs.length} file(s)`]]} />
+        <KV items={[['Name', v.name], ['Email', v.email + ' (verified)'], ['Date of birth', v.dob], ['Store', v.store], ['Category', CATEGORIES.find(c => c.id === v.cat).name], ['Product types', v.types.map(t => SUBS[t].name).join(', ')], ['Address', `${v.addr}, ${v.city}, ${v.country}`], ['Identity document', live ? 'Checked by Didit after you submit' : `${v.doc} · ${v.docs.length} file(s)`]]} />
         <Notice tone="info">Submitting does not activate your store. A separate verification process approves sellers; you cannot approve yourself.</Notice></>}
       {step === 4 && store && <StatusPanel store={store} />}
       {step < 4 && <div className="onb-foot"><Btn v="ghost" disabled={step === 0} onClick={() => setStep(step - 1)}>Back</Btn><span className="xs muted">Progress saves when you continue.</span>{step < 3 ? <Btn v="primary" onClick={next}>Continue</Btn> : <Btn v="primary" onClick={submit}>Submit application</Btn>}</div>}
@@ -76,8 +81,18 @@ export function Onboarding() {
     </div></div>;
 }
 function StatusPanel({ store }) {
+  const { db, toast, refresh } = useApp(); const [busy, setBusy] = useState('');
   const states = ['Draft', 'Email verification pending', 'Verification pending', 'More information required', 'Active'];
+  const kyc = db.verifications.find(x => x.storeId === store.id)?.kyc;
+  const open = async () => { setBusy('open'); try { window.location.assign((await api.kycStart()).url); } catch (e) { toast(e.message || 'The verification page could not be opened.', 'bad'); setBusy(''); } };
+  const check = async () => { setBusy('check'); try { await api.kycRefresh(); await refresh(); } catch (e) { toast(e.message || 'The result could not be checked.', 'bad'); } setBusy(''); };
+  const waiting = kyc && ['Not started', 'Not Started', 'In Progress', 'Awaiting User', 'Abandoned', 'Expired', 'Kyc Expired', 'Resubmitted'].includes(kyc.status);
   return <><h2>Verification status</h2>
+    {kyc && store.status !== 'Active' && (kyc.status === 'Approved' ? <Notice tone="ok" title="Identity verified">{kyc.provider} confirmed your identity. The marketplace team now reviews your application.</Notice>
+      : kyc.status === 'In Review' ? <Notice tone="info" title="Identity check under review">{kyc.provider} is reviewing your check manually. You will be notified of the result.</Notice>
+      : <Notice tone={kyc.status === 'Declined' ? 'bad' : 'warn'} title={kyc.status === 'Declined' ? 'Identity check not accepted' : 'Verify your identity to continue'}
+          action={<span className="row-gap"><Btn size="sm" v="primary" disabled={!!busy} onClick={open}>{busy === 'open' ? 'Opening…' : kyc.status === 'Declined' ? 'Try again' : waiting && kyc.url ? 'Continue verification' : 'Verify identity'}</Btn>{kyc.url && <Btn size="sm" disabled={!!busy} onClick={check}>{busy === 'check' ? 'Checking…' : 'Check result'}</Btn>}</span>}>
+          {kyc.status === 'Declined' ? `${kyc.provider} could not confirm your identity. Check that your document is valid and the photo is clear, then try again.` : `Your application cannot be reviewed until ${kyc.provider} has checked your ID and a selfie. Have your government ID ready; it takes about two minutes.`}</Notice>)}
     <div className="vstatus"><Badge tone={store.status === 'Active' ? 'ok' : 'warn'} dot>{store.status}</Badge><span className="muted small">{store.name}</span></div>
     {store.status === 'Active' ? <Notice tone="ok" title="Your store is active">You can publish listings and receive orders.</Notice> :
       <Notice tone="warn" title="Review in progress (simulated)">You can finish setting up your store and prepare draft listings. Listings cannot go live and you cannot receive orders until a separate verification process activates the store. Sellers cannot approve their own verification.</Notice>}

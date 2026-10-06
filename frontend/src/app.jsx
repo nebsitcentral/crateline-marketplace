@@ -134,7 +134,9 @@ function App() {
   const [fileMode, setFileMode] = useState(apiEnabled ? 'off' : 'demo');
   // API mode: 'nowpayments' (or 'nowpayments-sandbox') when crypto checkouts are real payments.
   const [payMode, setPayMode] = useState('simulated');
-  useEffect(() => { if (apiEnabled) api.health().then(h => { setEmailMode(h.email || 'off'); setFileMode(h.files || 'off'); setPayMode(h.payments || 'simulated'); }).catch(() => setEmailMode('off')); }, []);
+  // API mode: 'didit' when sellers verify their identity with the provider.
+  const [kycMode, setKycMode] = useState('simulated');
+  useEffect(() => { if (apiEnabled) api.health().then(h => { setEmailMode(h.email || 'off'); setFileMode(h.files || 'off'); setPayMode(h.payments || 'simulated'); setKycMode(h.kyc || 'simulated'); }).catch(() => setEmailMode('off')); }, []);
   // Links from emails arrive as ?verify=, ?reset= or ?email=. Open the matching page and remove
   // the token from the address bar so it is not kept in history or shared by accident.
   useEffect(() => {
@@ -154,6 +156,16 @@ function App() {
     const id = paidRef.current; paidRef.current = null;
     const q = new URLSearchParams(window.location.search); q.delete('paid'); window.history.replaceState(null, '', window.location.pathname + (q.toString() ? '?' + q : '') + window.location.hash);
     nav({ page: 'pay-result', id });
+  }, [apiStatus]);
+
+  // Returning from identity verification (?kyc=1): read the result and show the seller's status.
+  const kycRef = useRef(apiEnabled && new URLSearchParams(window.location.search).has('kyc'));
+  useEffect(() => {
+    if (!kycRef.current || apiStatus !== 'ready') return;
+    kycRef.current = false;
+    const q = new URLSearchParams(window.location.search); q.delete('kyc'); window.history.replaceState(null, '', window.location.pathname + (q.toString() ? '?' + q : '') + window.location.hash);
+    nav({ page: 's-onboarding' });
+    if (api.hasToken()) api.kycRefresh().then(() => loadState()).catch(() => { });
   }, [apiStatus]);
 
   // A named transition. API mode: the server runs action `name` with `args`, then the data is
@@ -239,7 +251,7 @@ function App() {
 
   if (import.meta.env.DEV) window.__crateline = { db: () => dbRef.current }; // dev-only inspection hook
   const db = dbRef.current; const me = userId ? db.users[userId] : null; const staff = staffId ? db.staff[staffId] : null;
-  const ctx = { db, me, staff, mode, route, nav, update, act, toast, refresh, apiSignIn, perform, withInline, more, loadMore, emailMode, fileMode, payMode, requireAuth, signIn, signOut, switchMode, setAccount, resetDemo, advance, setScenario, pendingIntent, listState, evidenceOpen, openPreview: setPreview };
+  const ctx = { db, me, staff, mode, route, nav, update, act, toast, refresh, apiSignIn, perform, withInline, more, loadMore, emailMode, fileMode, payMode, kycMode, requireAuth, signIn, signOut, switchMode, setAccount, resetDemo, advance, setScenario, pendingIntent, listState, evidenceOpen, openPreview: setPreview };
   const p = route.page;
   let body;
   if (apiStatus !== 'ready') {

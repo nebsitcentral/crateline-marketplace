@@ -71,8 +71,37 @@ export function sellerResubmit(d, sid) {
 }
 export function markCheck(d, s, sid, check) {
   need(d, s, 'sellers.decide', 'record verification checks');
-  const vr = vOf(d, sid); if (vr.checks[check]) fail('This check is already complete.'); vr.checks[check] = true; bump(vr);
+  const vr = vOf(d, sid); if (vr.checks[check]) fail('This check is already complete.');
+  if (vr.kyc && check === 'identity') fail(`Identity is checked by ${vr.kyc.provider}. It cannot be marked complete by hand.`);
+  vr.checks[check] = true; bump(vr);
   audit(d, me(d, s), `Demo check completed: ${check}`, sid, { reason: 'Simulated check. No external provider was contacted.' });
+}
+// ---------- identity verification provider (KYC)
+// A verification session was opened for the seller at the provider.
+export function kycSessionStarted(d, sid, { provider, sessionId, url }) {
+  const vr = vOf(d, sid); if (!vr?.kyc || vr.kyc.provider !== provider) fail('This application does not use identity verification by a provider.');
+  Object.assign(vr.kyc, { sessionId, url, status: 'Not Started', at: now(), result: null });
+}
+// The provider's outcome for a session, read from its API by the server. It completes or reopens
+// the identity check (and the sanctions check when the provider screened for it); it never
+// approves the store. Staff still decide. The same status twice changes nothing.
+export function kycProviderEvent(d, { provider, storeId, sessionId, status, result = null }) {
+  const vr = vOf(d, storeId); const st = d.stores[storeId];
+  if (!vr?.kyc || vr.kyc.provider !== provider || !sessionId || vr.kyc.sessionId !== sessionId) return 'unknown';
+  if (vr.kyc.status === status) return 'unchanged';
+  const before = vr.kyc.status; Object.assign(vr.kyc, { status, at: now(), result: result || vr.kyc.result });
+  if (status === 'Approved') { vr.checks.identity = true; if (result?.aml === 'Approved') vr.checks.sanctions = true; }
+  else if (vr.checks.identity) vr.checks.identity = false;
+  const final = ['Approved', 'Declined', 'In Review'].includes(status);
+  if (final) {
+    vr.decisions.push({ at: now(), by: provider, decision: `Identity check: ${status}`, reason: status === 'Approved' ? `Document and face checked by ${provider}` : status === 'Declined' ? `${provider} did not accept the identity check` : `${provider} is reviewing the check manually`, version: vr.version });
+    audit(d, { name: provider, kind: 'Provider' }, `Identity check ${status.toLowerCase()}`, storeId, { before, after: status });
+    if (status === 'Approved') {
+      cnotify(d, st.ownerId, 'seller', 'Your identity is verified. The marketplace team will now review your application.', { page: 's-onboarding' });
+      snotify(d, staffWith(d, 'sellers.decide'), 'New assignment', `${st.name}: identity verified by ${provider}. The application is ready for review.`, { page: 'a-seller', id: storeId });
+    } else if (status === 'Declined') cnotify(d, st.ownerId, 'seller', 'Your identity check was not accepted. Open seller verification to try again.', { page: 's-onboarding' });
+  }
+  bump(vr); return status;
 }
 export function sellerApprove(d, s, sid, reason, message, v) {
   need(d, s, 'sellers.decide', 'approve sellers');

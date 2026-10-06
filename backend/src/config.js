@@ -31,12 +31,17 @@ export const config = {
   // Crypto payments through NOWPayments. Needs the API key and the IPN secret (Payments settings >
   // Instant payment notifications). NOWPAYMENTS_SANDBOX=true uses their sandbox with sandbox keys.
   nowpayments: { apiKey: env.NOWPAYMENTS_API_KEY || '', ipnSecret: env.NOWPAYMENTS_IPN_SECRET || '', sandbox: bool(env.NOWPAYMENTS_SANDBOX, false) },
+  // Seller identity verification through Didit: API key, webhook secret and the workflow to run
+  // (all three from the Didit console).
+  didit: { apiKey: env.DIDIT_API_KEY || '', webhookSecret: env.DIDIT_WEBHOOK_SECRET || '', workflowId: env.DIDIT_WORKFLOW_ID || '' },
   r2: { accountId: env.R2_ACCOUNT_ID || '', accessKeyId: env.R2_ACCESS_KEY_ID || '', secret: env.R2_SECRET_ACCESS_KEY || '', bucket: env.R2_BUCKET || '' },
 };
 config.emailTransport = env.EMAIL_TRANSPORT || (config.brevoApiKey ? 'brevo' : production ? 'off' : 'log');
 config.fileStorage = env.FILE_STORAGE || (Object.values(config.r2).every(Boolean) ? 'r2' : 'off');
 // 'nowpayments': crypto checkouts are real. 'simulated': every payment method is simulated.
 config.payments = env.PAYMENTS || (config.nowpayments.apiKey && config.nowpayments.ipnSecret ? 'nowpayments' : 'simulated');
+// 'didit': sellers verify their identity with Didit. 'simulated': placeholder documents and demo checks.
+config.kyc = env.KYC || (Object.values(config.didit).every(Boolean) ? 'didit' : 'simulated');
 
 export function assertConfig() {
   const missing = [];
@@ -46,5 +51,6 @@ export function assertConfig() {
   if (config.production && config.jwtSecret.length < 32) throw new Error('JWT_SECRET must be at least 32 characters in production.');
   if (config.emailTransport === 'brevo' && (!config.brevoApiKey || !/^\S+@\S+\.\S+$/.test(config.emailFrom))) throw new Error('Brevo email needs BREVO_API_KEY and EMAIL_FROM (a sender address verified in Brevo).');
   if (config.payments === 'nowpayments' && !(config.nowpayments.apiKey && config.nowpayments.ipnSecret)) throw new Error('NOWPayments needs NOWPAYMENTS_API_KEY and NOWPAYMENTS_IPN_SECRET.');
+  if (config.kyc === 'didit' && !Object.values(config.didit).every(Boolean)) throw new Error('Didit needs DIDIT_API_KEY, DIDIT_WEBHOOK_SECRET and DIDIT_WORKFLOW_ID.');
   if (config.fileStorage === 'r2' && !Object.values(config.r2).every(Boolean)) throw new Error('File storage on R2 needs R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY and R2_BUCKET.');
 }

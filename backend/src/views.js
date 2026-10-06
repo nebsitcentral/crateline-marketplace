@@ -76,7 +76,8 @@ export function staffView(d, staff) {
   // records only with seller or catalog access.
   const full = c('sellers.view') || c('catalog.view');
   out.stores = Object.fromEntries(Object.entries(d.stores).map(([k, s]) => [k, full ? { ...s, stats: publicStore(d, s).stats } : publicStore(d, s)]));
-  if (c('sellers.view')) out.verifications = d.verifications.map(v => c('sellers.evidence') ? v : { ...v, evidence: v.evidence.map(() => ({ name: 'hidden', size: 0 })), identity: { ...v.identity, dob: 'hidden' } });
+  // The provider's session link is the seller's alone; verified identity fields need the evidence permission.
+  if (c('sellers.view')) out.verifications = d.verifications.map(v => { const kyc = v.kyc ? { kyc: { ...v.kyc, url: null, sessionId: null, result: c('sellers.evidence') ? v.kyc.result : null } } : {}; return c('sellers.evidence') ? { ...v, ...kyc } : { ...v, ...kyc, evidence: v.evidence.map(() => ({ name: 'hidden', size: 0 })), identity: { ...v.identity, dob: 'hidden' } }; });
   if (c('catalog.view')) { out.listings = d.listings; out.reports = d.reports; }
   if (c('content.draft')) { out.content = d.content; out.policies = d.policies; }
   if (c('orders.view')) { out.orders = d.orders.map(o => c('orders.evidence') ? o : { ...o, deliveries: o.deliveries.map(x => ({ ...x, file: null })) }); out.purchases = d.purchases; }

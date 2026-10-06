@@ -56,6 +56,9 @@ export const api = {
   },
   // Crypto payment: returns { url } of the provider's payment page for a pending purchase.
   startPayment: purchaseId => call(`/api/payments/${purchaseId}/start`, { method: 'POST' }),
+  // Seller identity verification: { url } of the provider's page; refresh reads the latest result.
+  kycStart: () => call('/api/kyc/start', { method: 'POST' }),
+  kycRefresh: () => call('/api/kyc/refresh', { method: 'POST' }),
   fileUrl: id => call(`/api/files/${id}/url`),
   addPayoutMethod: body => call('/api/payout-methods', { method: 'POST', body }),
   // Demo controls: Super Admin only, and only while the server allows them (ALLOW_DEMO_CONTROLS).

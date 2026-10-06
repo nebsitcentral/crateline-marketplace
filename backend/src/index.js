@@ -7,6 +7,7 @@ import { tick } from '@crateline/domain/fin.js';
 import { createTransport, processOutbox } from './email.js';
 import { createStorage } from './files.js';
 import { createPayments } from './payments.js';
+import { createKyc } from './kyc.js';
 
 assertConfig();
 if (config.databaseUrl) await migrate();
@@ -15,8 +16,8 @@ await store.init();
 if (await seedStore(store)) console.log('Empty store: loaded demo fixtures.');
 
 const transport = createTransport();
-const app = createApp(store, { transport, storage: createStorage(), payments: createPayments() });
-const server = app.listen(config.port, () => console.log(`Crateline API on :${config.port} (${store.kind} store, simulated providers ${config.simulateProviders ? 'on' : 'off'}, email ${config.emailTransport}, files ${config.fileStorage}, payments ${config.payments})`));
+const app = createApp(store, { transport, storage: createStorage(), payments: createPayments(), kyc: createKyc() });
+const server = app.listen(config.port, () => console.log(`Crateline API on :${config.port} (${store.kind} store, simulated providers ${config.simulateProviders ? 'on' : 'off'}, email ${config.emailTransport}, files ${config.fileStorage}, payments ${config.payments}, kyc ${config.kyc})`));
 
 // Release earnings, escalate overdue cases and apply scheduled settings every 10 minutes.
 const timer = setInterval(() => store.transact(d => tick(d)).catch(e => console.error('tick failed', e)), 10 * 60e3);
