@@ -18,7 +18,8 @@ Seller panel, and Admin and Super Admin management panels.
   transitions. Covered by tests (`npm test`).
 * **Connected:** with `VITE_API_URL` set, every screen reads and writes through the API. Email
   (Brevo), two-factor sign-in and file storage (Cloudflare R2) are real once their keys are set.
-* **Not yet done:** payment, payout and KYC providers are simulated. `CLAUDE.md` lists the
+* **Crypto payments:** real through NOWPayments once its keys are set (see below).
+* **Not yet done:** card and wallet payments, payouts and KYC are simulated. `CLAUDE.md` lists the
   remaining work (Phase 3).
 
 ## Requirements
@@ -94,6 +95,23 @@ gives only to people who may see the file. Files are limited to 60 MB; executabl
    ```
 4. Set the four `R2_*` variables on the Railway `backend` service (and in `backend/.env` locally).
    `/health` then reports `"files": "r2"`.
+
+## Crypto payments (NOWPayments)
+
+With the keys set, choosing **Crypto** at checkout is a real payment: the buyer pays on
+NOWPayments' page, and the order is created only when NOWPayments sends a signed notification that
+the full, exact amount arrived. Underpayments, late payments and second payments go to
+**Reconciliation** in the admin panel instead of creating an order. Card, bKash and Nagad stay
+simulated, and are refused altogether when `SIMULATE_PROVIDERS=false`.
+
+1. NOWPayments dashboard: add a payout wallet (required before payments can be created).
+2. **Payments settings → API keys**: create a key. **Instant payment notifications**: generate the
+   IPN secret key. No callback address needs to be entered there; the API sends it with each invoice.
+3. Set on the Railway `backend` service: `NOWPAYMENTS_API_KEY`, `NOWPAYMENTS_IPN_SECRET`, and
+   `APP_URL` (the website address buyers return to). `/health` then reports
+   `"payments": "nowpayments"`.
+4. To try it without real money, use keys from a separate sandbox account
+   (account-sandbox.nowpayments.io) and also set `NOWPAYMENTS_SANDBOX=true`.
 
 ## Deploy the frontend to GitHub Pages
 

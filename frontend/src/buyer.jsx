@@ -6,7 +6,7 @@ import { Icon, Btn, Badge, Avatar, Stars, StarInput, ProductArt, Modal, Confirm,
 import { PageHead, SearchBox } from './shell.jsx';
 import * as A from '@crateline/domain/actions.js';
 import { SupportForm } from './public.jsx';
-import { apiEnabled } from './api.js';
+import { api, apiEnabled } from './api.js';
 const { useState, useEffect, useMemo } = React;
 
 export function UOverview() {
@@ -88,7 +88,7 @@ export function Cart() {
 
 const OUTCOMES = [{ id: 'success', label: 'Success', tone: 'ok' }, { id: 'pending', label: 'Pending', tone: 'warn' }, { id: 'failure', label: 'Failure', tone: 'bad' }, { id: 'cancel', label: 'Cancelled' }];
 export function Checkout() {
-  const { db, me, route, nav, update, toast, perform } = useApp();
+  const { db, me, route, nav, update, toast, perform, payMode } = useApp();
   useEffect(() => { if (!apiEnabled) update(d => refreshOfferExpiry(d)); }, []);
   const lines = useMemo(() => {
     if (route.offerId) {
@@ -106,6 +106,8 @@ export function Checkout() {
   const sub = round2(lines.reduce((a, x) => a + x.pkg.price * x.count, 0)); const feeRate = db.settings.current.buyerFeeRate; const fee = round2(sub * feeRate); const total = round2(sub + fee);
   const sellers = new Set(lines.map(x => x.l.storeId)).size;
   const blocked = lines.some(x => !x.ok);
+  // A real payment: the buyer pays on the provider's page and the order waits for its confirmation.
+  const live = apiEnabled && payMode.startsWith('nowpayments') && method === 'Crypto';
   function pay() {
     if (!terms) return setErr('Accept the Terms and the delivery, replacement and refund terms to continue.');
     if (method === 'Card' && card.num.replace(/\s/g, '').length < 15) return setErr('Enter a valid card number.');
@@ -126,6 +128,10 @@ export function Checkout() {
         if (outcome === 'failure') notify(d, me.id, 'buyer', `Payment ${id} failed (simulated). No charge was made.`, { page: 'pay-result', id });
         return { purchaseId: id };
       }, undefined, { inline: true });
+      if (r.ok && live) {
+        try { window.location.assign((await api.startPayment(r.value.purchaseId)).url); return; }
+        catch (e) { toast(e.message || 'The payment page could not be opened. Try again from this page.', 'bad'); }
+      }
       setBusy(false);
       if (r.ok) nav({ page: 'pay-result', id: r.value.purchaseId }); else setErr(r.error.message);
     }, apiEnabled ? 0 : 1100);
@@ -146,12 +152,14 @@ export function Checkout() {
           <label key={m} className={'pay-m' + (method === m ? ' on' : '')}><input type="radio" name="pm" checked={method === m} onChange={() => setMethod(m)} /><Icon n={ic} s={18} /><b>{m}</b></label>)}</div>
         <div className="pay-detail">
           {method === 'Card' && <div className="form-grid"><Field label="Name on card"><input value={card.name} onChange={e => setCard({ ...card, name: e.target.value })} /></Field><Field label="Card number" hint="Demo number prefilled"><input inputMode="numeric" value={card.num} onChange={e => setCard({ ...card, num: e.target.value })} /></Field><Field label="Expiry"><input value={card.exp} onChange={e => setCard({ ...card, exp: e.target.value })} /></Field><Field label="CVC"><input value={card.cvc} onChange={e => setCard({ ...card, cvc: e.target.value })} /></Field></div>}
-          {method === 'Crypto' && <div><Field label="Network and asset"><select value={net} onChange={e => setNet(e.target.value)}>{['USDT on Tron (TRC-20)', 'USDT on Ethereum (ERC-20)', 'USDC on Base'].map(n => <option key={n}>{n}</option>)}</select></Field>
+          {method === 'Crypto' && live && <div><p className="small">You pay on the NOWPayments page, where you choose the coin and network and get the exact amount and address. Your order is created when the network confirms the full payment, usually within a few minutes.</p>
+            <p className="xs muted">Send the exact amount shown there. Underpayments and late payments are reviewed by our finance team instead of completing the order.</p></div>}
+          {method === 'Crypto' && !live && <div><Field label="Network and asset"><select value={net} onChange={e => setNet(e.target.value)}>{['USDT on Tron (TRC-20)', 'USDT on Ethereum (ERC-20)', 'USDC on Base'].map(n => <option key={n}>{n}</option>)}</select></Field>
             <KV items={[['Exact amount', <b>{total.toFixed(2)} {net.split(' ')[0]}</b>], ['Deposit address', <code className="addr">TQ7f…demo…9xKp (not a real address)</code>], ['Memo', 'Not required'], ['Quote expires', '30 minutes after you press Pay']]} />
             <p className="xs muted">Underpayment, overpayment or the wrong network go to a manual exception process instead of completing the order.</p></div>}
           {(method === 'bKash' || method === 'Nagad') && <Field label={`${method} wallet number`} hint={`You would approve the payment in the ${method} app. Nothing is sent in this prototype.`}><input type="tel" value={wallet} onChange={e => setWallet(e.target.value)} /></Field>}
         </div>
-        <div className="sim-box"><div><b>Demo outcome</b> <Sim>Simulated provider response</Sim><p className="xs muted">Choose what the payment provider returns.</p></div><Seg label="Payment outcome" options={OUTCOMES} value={outcome} onChange={setOutcome} /></div>
+        {!live && <div className="sim-box"><div><b>Demo outcome</b> <Sim>Simulated provider response</Sim><p className="xs muted">Choose what the payment provider returns.</p></div><Seg label="Payment outcome" options={OUTCOMES} value={outcome} onChange={setOutcome} /></div>}
       </Section>
     </div>
       <aside><div className="card pad sticky">
@@ -161,25 +169,29 @@ export function Checkout() {
           <div className="sum-total"><dt>Total</dt><dd>{money(total)} USD</dd></div></dl>
         <label className="checkline"><input type="checkbox" checked={terms} onChange={e => setTerms(e.target.checked)} /><span>I accept the <a href="#" onClick={e => { e.preventDefault(); nav({ page: 'terms' }); }}>Terms</a> and the <a href="#" onClick={e => { e.preventDefault(); nav({ page: 'policies' }); }}>delivery, replacement and refund terms</a> ({TERMS_VERSION}).</span></label>
         {err && <p className="ferr" role="alert">{err}</p>}
-        <Btn v="primary" className="block lg" disabled={busy || blocked} onClick={pay}>{busy ? <><span className="spin" />Processing payment…</> : `Pay ${money(total)} (simulated)`}</Btn>
-        <p className="xs muted center">No real payment is taken. A browser redirect alone never marks an order paid.</p>
+        <Btn v="primary" className="block lg" disabled={busy || blocked} onClick={pay}>{busy ? <><span className="spin" />{live ? 'Opening payment page…' : 'Processing payment…'}</> : live ? `Continue to pay ${money(total)}` : `Pay ${money(total)} (simulated)`}</Btn>
+        <p className="xs muted center">{live ? `This is a real payment${payMode.endsWith('sandbox') ? ' in the provider’s test environment' : ''}. ` : 'No real payment is taken. '}A browser redirect alone never marks an order paid.</p>
       </div></aside></div>
   </>;
 }
 
 export function PayResult() {
-  const { db, route, nav, me, perform } = useApp();
+  const { db, route, nav, me, perform, toast } = useApp(); const [opening, setOpening] = useState(false);
   const p = db.purchases.find(x => x.id === route.id && x.buyerId === me.id);
+  const openProvider = async () => { setOpening(true); try { window.location.assign((await api.startPayment(p.id)).url); } catch (e) { toast(e.message || 'The payment page could not be opened.', 'bad'); setOpening(false); } };
   if (!p) return <ErrorState title="Payment not found">This payment reference does not belong to your account.</ErrorState>;
   const retry = () => { const it = p.items; nav(it[0].offerId ? { page: 'checkout', offerId: it[0].offerId } : p.fromCart ? { page: 'checkout', fromCart: true } : { page: 'checkout', items: it.map(i => ({ listingId: i.listingId, pkgId: i.pkgId, count: i.count })), retryOf: p.id }); };
   const orders = (p.orderIds || []).map(id => db.orders.find(o => o.id === id));
   return <div className="result-page">
-    {p.status === 'Paid' && <><div className="result-ic ok"><Icon n="check" s={34} /></div><h1>Payment confirmed</h1><p className="muted">Reference <code>{p.id}</code> · {p.method} · {fmtDT(p.at)} <Sim /></p>
+    {p.status === 'Paid' && <><div className="result-ic ok"><Icon n="check" s={34} /></div><h1>Payment confirmed</h1><p className="muted">Reference <code>{p.id}</code> · {p.method} · {fmtDT(p.at)} {p.provider ? '· verified by ' + p.provider : <Sim />}</p>
       <Section title={`${orders.length} order${orders.length > 1 ? 's' : ''} created`}>
         <Table cols={[{ k: 'id', label: 'Order', render: o => <b>{o.id}</b> }, { k: 's', label: 'Seller', render: o => o.snap.storeName }, { k: 'p', label: 'Package', render: o => o.snap.pkgName }, { k: 'a', label: 'Allocation', cls: 'num', render: o => money(o.total) }, { k: 'st', label: 'Status', render: o => <StatusBadge o={o} /> }]} rows={orders} onRow={o => nav({ page: 'u-order', id: o.id })} />
         <p className="xs muted">Total charged {money(p.total)}. Each order shows only its own allocation; no seller charged the full amount.</p></Section>
       <div className="row-gap center"><Btn v="primary" onClick={() => nav(orders.length === 1 ? { page: 'u-order', id: orders[0].id } : { page: 'u-orders' })}>View {orders.length === 1 ? 'order' : 'orders'}</Btn><Btn onClick={() => nav({ page: 'home' })}>Continue shopping</Btn></div></>}
-    {p.status === 'Pending' && <><div className="result-ic warn"><Icon n="clock" s={34} /></div><h1>Payment pending</h1><p className="muted">Reference <code>{p.id}</code>. The provider has not confirmed this payment yet. No order exists until it does.</p>
+    {p.status === 'Pending' && p.provider && <><div className="result-ic warn"><Icon n="clock" s={34} /></div><h1>Waiting for your payment</h1><p className="muted">Reference <code>{p.id}</code>. {p.provider} has not confirmed this payment yet. No order exists until it does.</p>
+      <Notice tone="info" title="What happens next">If you have already sent the payment, keep this page open: it updates by itself once the network confirms it, usually within a few minutes. If you have not paid yet, continue to the payment page.</Notice>
+      <div className="row-gap center"><Btn v="primary" disabled={opening} onClick={openProvider}>{opening ? 'Opening payment page…' : 'Continue to payment page'}</Btn><Btn onClick={() => nav({ page: 'help', form: true })}>Contact support</Btn></div></>}
+    {p.status === 'Pending' && !p.provider && <><div className="result-ic warn"><Icon n="clock" s={34} /></div><h1>Payment pending</h1><p className="muted">Reference <code>{p.id}</code>. The provider has not confirmed this payment yet. No order exists until it does.</p>
       <Notice tone="info" title="Demo controls">Simulate what the provider sends next. Confirming twice never creates duplicate orders.</Notice>
       <div className="row-gap center"><Btn v="primary" onClick={() => perform('confirmPayment', { purchaseId: p.id }, d => completePurchase(d, p.id))}>Simulate provider confirmation</Btn><Btn onClick={() => perform('expirePayment', { purchaseId: p.id }, d => { d.purchases.find(x => x.id === p.id).status = 'Expired'; })}>Simulate expiry</Btn></div></>}
     {p.status === 'Failed' && <><div className="result-ic bad"><Icon n="x" s={34} /></div><h1>Payment failed</h1><p className="muted">Reference <code>{p.id}</code>. The provider declined the payment. You were not charged and no order was created.</p>

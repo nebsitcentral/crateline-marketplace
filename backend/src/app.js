@@ -11,7 +11,8 @@ import { addPayoutMethod } from '@crateline/domain/seller.js';
 import { compose, emailEnabled, processOutbox } from './email.js';
 import { newSecret, verifyCode, otpauthUri, newRecoveryCodes, hashRecovery, encrypt, decrypt } from './totp.js';
 import { config } from './config.js';
-import { currentTerms } from '@crateline/domain/logic.js';
+import { currentTerms, paymentProviderEvent } from '@crateline/domain/logic.js';
+import { STATUS as PAY_STATUS } from './payments.js';
 import { catalogView, customerView, staffView } from './views.js';
 import { customer as CUSTOMER, staff as STAFF } from './actions.js';
 import { seedStore } from './seed.js';
@@ -25,7 +26,7 @@ const newToken = () => crypto.randomBytes(32).toString('base64url');
 const hashToken = t => crypto.createHash('sha256').update(String(t)).digest('hex');
 const HOUR_MS = 3600e3;
 
-export function createApp(store, { transport = null, storage = null } = {}) {
+export function createApp(store, { transport = null, storage = null, payments = null } = {}) {
   // Deliver queued email soon after a request queues it; the interval worker in index.js retries.
   let sending = null;
   const kick = () => { if (transport && !sending) sending = processOutbox(store, transport).catch(e => console.error('email send failed', e)).finally(() => { sending = null; }); };
@@ -68,7 +69,7 @@ export function createApp(store, { transport = null, storage = null } = {}) {
     return rec;
   };
 
-  app.get('/health', wrap(async (req, res) => res.json({ ok: true, store: store.kind, simulateProviders: config.simulateProviders, demoControls: config.allowDemoControls, email: config.emailTransport, files: storage ? config.fileStorage : 'off', version: (process.env.RAILWAY_GIT_COMMIT_SHA || '').slice(0, 7) || 'local' })));
+  app.get('/health', wrap(async (req, res) => res.json({ ok: true, store: store.kind, simulateProviders: config.simulateProviders, demoControls: config.allowDemoControls, email: config.emailTransport, files: storage ? config.fileStorage : 'off', payments: payments ? (payments.sandbox ? 'nowpayments-sandbox' : 'nowpayments') : 'simulated', version: (process.env.RAILWAY_GIT_COMMIT_SHA || '').slice(0, 7) || 'local' })));
 
   app.get('/api/catalog', wrap(async (req, res) => { const { doc } = await store.read(); res.json(catalogView(doc)); }));
 
@@ -290,6 +291,33 @@ export function createApp(store, { transport = null, storage = null } = {}) {
     if (!acc || !(await bcrypt.compare(String(password || ''), acc.hash))) throw Object.assign(new DomainError('Your password is incorrect.', 'validation'), { field: 'password' });
     const { version } = await store.transact(d => addPayoutMethod(d, actorFrom(d, req.auth), method));
     res.status(201).json({ ok: true, version });
+  }));
+
+  // ---------- crypto payments (NOWPayments)
+  // The buyer checks out (action `checkout`, purchase Pending), then asks for the hosted invoice
+  // page here. Asking again returns the same invoice.
+  app.post('/api/payments/:purchaseId/start', auth(), wrap(async (req, res) => {
+    if (!payments) throw new DomainError('Crypto payments are not set up on this server yet.', 'rejected');
+    const { doc } = await store.read(); const u = req.auth.kind === 'user' && actorFrom(doc, req.auth);
+    const p = u && doc.purchases.find(x => x.id === req.params.purchaseId && x.buyerId === u.id); const pay = p && doc.payments.find(x => x.purchaseId === p.id);
+    if (!pay || p.provider !== payments.name) throw new DomainError('Payment not found.', 'not_found');
+    if (p.status !== 'Pending') throw new DomainError(`This payment is ${p.status.toLowerCase()}. Start a new one from checkout.`, 'rejected');
+    if (pay.payUrl) return res.json({ url: pay.payUrl });
+    const inv = await payments.createInvoice({ purchaseId: p.id, amount: p.total, description: `Crateline purchase ${p.id}`, callbackUrl: config.apiUrl + '/api/webhooks/nowpayments', returnUrl: `${config.appUrl}/?paid=${p.id}` });
+    await store.transact(d => { const x = d.payments.find(y => y.id === pay.id); x.provider = payments.name; x.providerRef = inv.id; x.payUrl = inv.url; x.lastEventAt = Date.now(); x.events.push({ op: `${payments.name}:invoice:${inv.id}`, at: Date.now(), type: 'invoice.created', status: 'Processed' }); });
+    res.json({ url: inv.url });
+  }));
+  // Signed notifications from NOWPayments. An unsigned or wrongly signed request changes nothing.
+  // Known events answer 200 even when ignored, so the provider stops retrying.
+  app.post('/api/webhooks/nowpayments', wrap(async (req, res) => {
+    if (!payments) return res.status(404).json({ error: 'Not found.' });
+    const b = req.body;
+    if (!payments.verify(b, req.headers['x-nowpayments-sig'])) return res.status(401).json({ error: 'Invalid signature.' });
+    const status = PAY_STATUS[b.payment_status];
+    if (!status || b.payment_id == null || typeof b.order_id !== 'string') return res.json({ ok: true, result: 'ignored' });
+    const { value } = await store.transact(d => paymentProviderEvent(d, { provider: payments.name, purchaseId: b.order_id, ref: b.payment_id, status,
+      priceC: Math.round(Number(b.price_amount) * 100), cur: String(b.price_currency || '').toUpperCase(), paid: `${b.actually_paid ?? b.pay_amount ?? '?'} ${String(b.pay_currency || '').toUpperCase()}` }));
+    res.json({ ok: true, result: value });
   }));
 
   // ---------- files (deliveries, evidence, message attachments)

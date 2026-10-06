@@ -56,7 +56,11 @@ export const customer = {
     if (L.activeRestriction(u, 'purchases')) fail('Your account cannot place new orders right now.', 'denied');
     if (!Array.isArray(items) || !items.length || items.length > 20) fail('Add between 1 and 20 items.', 'validation');
     if (!['Card', 'Crypto', 'bKash', 'Nagad'].includes(method)) fail('Choose a payment method.', 'validation');
-    if (method === 'Crypto' && !CRYPTO_NETS.includes(net)) fail('Choose a network and asset.', 'validation');
+    // With NOWPayments set up, crypto is a real payment: the purchase waits for the provider's
+    // verified notification and the requested outcome is ignored. Other methods are simulated only.
+    const real = method === 'Crypto' && config.payments === 'nowpayments';
+    if (!real && !config.simulateProviders) fail(method === 'Crypto' ? 'Crypto payments are not set up on this server yet.' : `${method} payments are not available yet. Choose Crypto.`, 'validation');
+    if (method === 'Crypto' && !real && !CRYPTO_NETS.includes(net)) fail('Choose a network and asset.', 'validation');
     L.refreshOfferExpiry(d);
     const lines = items.map(it => {
       if (it.offerId) {
@@ -76,16 +80,16 @@ export const customer = {
     if (!Array.isArray(cartIds) || cartIds.some(id => !cart.some(ci => ci.id === id))) fail('Your cart changed. Review it and try again.', 'stale');
     if (retryOf && !d.purchases.some(p => p.id === retryOf && p.buyerId === u.id)) fail('Purchase not found.', 'not_found');
     const sub = Math.round(lines.reduce((a, x) => a + x.price * x.count, 0) * 100) / 100; const fee = Math.round(sub * F.S(d).buyerFeeRate * 100) / 100;
-    const status = !config.simulateProviders ? 'Pending' : ({ success: 'Processing', pending: 'Pending', failure: 'Failed', cancel: 'Cancelled' }[outcome] || 'Pending');
+    const status = real ? 'Pending' : ({ success: 'Processing', pending: 'Pending', failure: 'Failed', cancel: 'Cancelled' }[outcome] || 'Pending');
     const id = L.newId(d, 'PG');
-    d.purchases.unshift({ id, buyerId: u.id, at: F.now(), method, net: method === 'Crypto' ? net : null, subtotal: sub, fee, total: Math.round((sub + fee) * 100) / 100, status, termsVersion: L.currentTerms(d), items: lines, fromCart: cartIds.length > 0, cartIds, retryOf, ordersCreated: false });
+    d.purchases.unshift({ id, buyerId: u.id, at: F.now(), method, net: method === 'Crypto' && !real ? net : null, provider: real ? 'NOWPayments' : null, subtotal: sub, fee, total: Math.round((sub + fee) * 100) / 100, status, termsVersion: L.currentTerms(d), items: lines, fromCart: cartIds.length > 0, cartIds, retryOf, ordersCreated: false });
     L.startPayment(d, d.purchases[0]);
     if (status === 'Processing') L.completePurchase(d, id);
     if (status === 'Failed') L.notify(d, u.id, 'buyer', `Payment ${id} failed (simulated). No charge was made.`, { page: 'pay-result', id });
     return { purchaseId: id, status: d.purchases.find(p => p.id === id).status };
   },
-  expirePayment(d, u, { purchaseId }) { sim(); const p = d.purchases.find(x => x.id === purchaseId && x.buyerId === u.id) || fail('Purchase not found.', 'not_found'); if (p.status !== 'Pending') fail(`Purchase is ${p.status}.`); p.status = 'Expired'; },
-  confirmPayment(d, u, { purchaseId }) { sim(); const p = d.purchases.find(x => x.id === purchaseId && x.buyerId === u.id) || fail('Purchase not found.', 'not_found'); if (p.status !== 'Pending') fail(`Purchase is ${p.status}.`); L.completePurchase(d, p.id); return { status: 'Paid' }; },
+  expirePayment(d, u, { purchaseId }) { sim(); const p = d.purchases.find(x => x.id === purchaseId && x.buyerId === u.id) || fail('Purchase not found.', 'not_found'); if (p.status !== 'Pending') fail(`Purchase is ${p.status}.`); if (p.provider) fail(`Only ${p.provider} can confirm or expire this payment.`, 'denied'); p.status = 'Expired'; },
+  confirmPayment(d, u, { purchaseId }) { sim(); const p = d.purchases.find(x => x.id === purchaseId && x.buyerId === u.id) || fail('Purchase not found.', 'not_found'); if (p.status !== 'Pending') fail(`Purchase is ${p.status}.`); if (p.provider) fail(`Only ${p.provider} can confirm or expire this payment.`, 'denied'); L.completePurchase(d, p.id); return { status: 'Paid' }; },
   submitInfo(d, u, { orderId, text }) { const o = asBuyer(d, u, orderId); if (o.status !== 'awaiting_info') fail('This order is not waiting for information.'); A.submitInfo(d, o, str(text, 'Information', 3)); },
   confirmReceived(d, u, { orderId }) { const o = asBuyer(d, u, orderId); if (o.status !== 'delivered') fail('Only a delivered order can be confirmed.'); if (L.openCase(d, o)) fail('Resolve the open case first.'); A.confirmReceived(d, o); },
   requestReplacement(d, u, { orderId, reason, files = [] }) { const o = asBuyer(d, u, orderId); if (o.status !== 'delivered') fail('Replacements can be requested on delivered orders.'); A.requestReplacement(d, o, str(reason, 'Reason', 5), fileList(d, u, files, 'order')); },

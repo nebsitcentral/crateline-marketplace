@@ -31,6 +31,7 @@ backend/src/           Express API
   actions.js           Whitelist of named actions for customers and staff
   views.js             What each caller may read (server-side filtering)
   files.js             File storage on Cloudflare R2: signed upload and download URLs
+  payments.js          NOWPayments: hosted invoices and signed notification (IPN) checks
   store.js             Memory store (dev, tests) or Postgres store (one versioned JSON document)
   migrate.js seed.js   Tables and demo fixtures
 backend/test/          node:test suites (domain rules and HTTP API)
@@ -143,7 +144,17 @@ Super Admins time travel, provider outcomes (`/api/demo/scenario`) and reset whi
    (retention period is a business decision), virus scanning, listing/store images and avatars
    (still simulated), seller verification documents (go to the KYC provider, Didit).
 4. Payment providers with verified webhooks feeding the same idempotent `processedOps` logic.
-   Chosen: NOWPayments (crypto). No card provider chosen yet.
+   **Crypto done:** NOWPayments (`backend/src/payments.js`). With `NOWPAYMENTS_API_KEY` and
+   `NOWPAYMENTS_IPN_SECRET` set, a Crypto checkout creates a Pending purchase marked
+   `provider: 'NOWPayments'`; `POST /api/payments/:purchaseId/start` creates the hosted invoice
+   (once) and the browser goes there. `POST /api/webhooks/nowpayments` checks the HMAC-SHA512
+   signature and calls `paymentProviderEvent` (`logic.js`): only a pending purchase paid in full
+   at its exact USD total gets orders (`completePurchase(d, id, 'NOWPayments')`); amount mismatch,
+   underpayment, late, second payment and provider refund create a reconciliation item. Demo
+   confirm/expire actions refuse provider purchases. With `SIMULATE_PROVIDERS=false`, methods
+   without a real provider are refused. Not yet tried against the real or sandbox NOWPayments API.
+   Still to do: a job that queries NOWPayments for purchases left Pending (missed notifications),
+   refunds of crypto payments (manual at the provider today), a card provider (none chosen).
 5. Payout provider and reconciliation jobs (NOWPayments mass payouts). KYC provider for seller
    verification (Didit).
 6. Approved legal text for policies; confirm the Section 20 business decisions.

@@ -132,7 +132,9 @@ function App() {
   const [emailMode, setEmailMode] = useState(apiEnabled ? null : 'demo');
   // API mode: 'r2' when the server stores files; otherwise attachments stay simulated.
   const [fileMode, setFileMode] = useState(apiEnabled ? 'off' : 'demo');
-  useEffect(() => { if (apiEnabled) api.health().then(h => { setEmailMode(h.email || 'off'); setFileMode(h.files || 'off'); }).catch(() => setEmailMode('off')); }, []);
+  // API mode: 'nowpayments' (or 'nowpayments-sandbox') when crypto checkouts are real payments.
+  const [payMode, setPayMode] = useState('simulated');
+  useEffect(() => { if (apiEnabled) api.health().then(h => { setEmailMode(h.email || 'off'); setFileMode(h.files || 'off'); setPayMode(h.payments || 'simulated'); }).catch(() => setEmailMode('off')); }, []);
   // Links from emails arrive as ?verify=, ?reset= or ?email=. Open the matching page and remove
   // the token from the address bar so it is not kept in history or shared by accident.
   useEffect(() => {
@@ -143,6 +145,16 @@ function App() {
     setRoute({ page: hit[1], token: q.get(hit[0]) });
     q.delete(hit[0]); window.history.replaceState(null, '', window.location.pathname + (q.toString() ? '?' + q : '') + window.location.hash);
   }, []);
+
+  // Returning from the payment provider (?paid=<purchase>): show that payment's status once the
+  // session has loaded. The address itself proves nothing; the status comes from the server.
+  const paidRef = useRef(apiEnabled ? new URLSearchParams(window.location.search).get('paid') : null);
+  useEffect(() => {
+    if (!paidRef.current || apiStatus !== 'ready') return;
+    const id = paidRef.current; paidRef.current = null;
+    const q = new URLSearchParams(window.location.search); q.delete('paid'); window.history.replaceState(null, '', window.location.pathname + (q.toString() ? '?' + q : '') + window.location.hash);
+    nav({ page: 'pay-result', id });
+  }, [apiStatus]);
 
   // A named transition. API mode: the server runs action `name` with `args`, then the data is
   // reloaded. Demo mode: `local(d)` runs on a copy of the in-browser store. The success message
@@ -227,7 +239,7 @@ function App() {
 
   if (import.meta.env.DEV) window.__crateline = { db: () => dbRef.current }; // dev-only inspection hook
   const db = dbRef.current; const me = userId ? db.users[userId] : null; const staff = staffId ? db.staff[staffId] : null;
-  const ctx = { db, me, staff, mode, route, nav, update, act, toast, refresh, apiSignIn, perform, withInline, more, loadMore, emailMode, fileMode, requireAuth, signIn, signOut, switchMode, setAccount, resetDemo, advance, setScenario, pendingIntent, listState, evidenceOpen, openPreview: setPreview };
+  const ctx = { db, me, staff, mode, route, nav, update, act, toast, refresh, apiSignIn, perform, withInline, more, loadMore, emailMode, fileMode, payMode, requireAuth, signIn, signOut, switchMode, setAccount, resetDemo, advance, setScenario, pendingIntent, listState, evidenceOpen, openPreview: setPreview };
   const p = route.page;
   let body;
   if (apiStatus !== 'ready') {

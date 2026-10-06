@@ -54,6 +54,8 @@ export const api = {
     });
     return (await call(`/api/files/${r.id}/complete`, { method: 'POST' })).file;
   },
+  // Crypto payment: returns { url } of the provider's payment page for a pending purchase.
+  startPayment: purchaseId => call(`/api/payments/${purchaseId}/start`, { method: 'POST' }),
   fileUrl: id => call(`/api/files/${id}/url`),
   addPayoutMethod: body => call('/api/payout-methods', { method: 'POST', body }),
   // Demo controls: Super Admin only, and only while the server allows them (ALLOW_DEMO_CONTROLS).

@@ -1,5 +1,5 @@
 import { D, CATEGORIES, SUBS, snapshotOf, round2, ev } from './data.js';
-import { now, fmtMoney, toC, recordSale, commissionFor, storeBuckets, cnotify, nid, S, DomainError } from './fin.js';
+import { now, fmtMoney, toC, recordSale, commissionFor, storeBuckets, cnotify, snotify, staffWith, nid, S, DomainError } from './fin.js';
 export { now };
 
 export const money = d => fmtMoney(Math.round(d * 100));
@@ -89,7 +89,7 @@ export function pushMsg(d, c, from, text, x = {}) {
 }
 export function orderEv(o, actor, text, kind) { o.events.push(ev(now(), actor, text, kind)); o.version = (o.version || 1) + 1; }
 
-export function createOrder(d, { buyerId, listing, pkg, count, requirements, purchaseRef, method, offer, payRef }) {
+export function createOrder(d, { buyerId, listing, pkg, count, requirements, purchaseRef, method, offer, payRef, via = null }) {
   const st = d.stores[listing.storeId];
   const snap = snapshotOf(listing, pkg, st);
   if (offer) Object.assign(snap, { pkgName: 'Custom offer ' + offer.id, pkgDesc: offer.scope, qty: offer.qty, price: offer.price, days: offer.days, replacement: offer.replacement, offerId: offer.id });
@@ -106,7 +106,7 @@ export function createOrder(d, { buyerId, listing, pkg, count, requirements, pur
     archivedBySeller: false, review: null, fromOfferId: offer?.id || null, termsVersion: currentTerms(d), commissionRate: cm.rate, commissionRule: cm.rule, version: 1,
   };
   orderEv(o, 'Buyer', 'Order placed' + (offer ? ` from accepted offer ${offer.id}` : ''));
-  orderEv(o, 'System', `Payment verified (${method}, simulated)`, 'ok');
+  orderEv(o, 'System', `Payment verified (${method}, ${via ? 'by ' + via : 'simulated'})`, 'ok');
   if (needInfo) orderEv(o, 'System', 'Awaiting buyer information. Delivery clock paused', 'warn');
   d.orders.unshift(o);
   recordSale(d, o);
@@ -125,19 +125,20 @@ export function startPayment(d, p) {
     events: [{ op: 'EVT-' + id.slice(4) + 'i', at: now(), type: 'payment.initiated', status: 'Processed' }].concat(p.status === 'Failed' ? [{ op: 'EVT-' + id.slice(4) + 'f', at: now(), type: 'payment.failed (simulated)', status: 'Processed' }] : p.status === 'Cancelled' ? [{ op: 'EVT-' + id.slice(4) + 'c', at: now(), type: 'payment.cancelled_by_buyer', status: 'Processed' }] : []), orderIds: [] });
   p.paymentId = id; return id;
 }
-// verified payment event: idempotent, so repeated confirmations never duplicate orders or earnings
-export function completePurchase(d, purchaseId) {
+// verified payment event: idempotent, so repeated confirmations never duplicate orders or earnings.
+// `via` names the real provider that verified the payment; without it the payment is simulated.
+export function completePurchase(d, purchaseId, via = null) {
   const p = d.purchases.find(p => p.id === purchaseId);
   if (!p) return p;
   const pay = d.payments.find(x => x.purchaseId === p.id);
   if (p.ordersCreated) { if (pay) pay.events.push({ op: 'EVT-' + pay.id.slice(4) + 's', at: now(), type: 'payment.succeeded (repeat)', status: 'Duplicate ignored' }); return p; }
   p.status = 'Paid'; p.ordersCreated = true; p.orderIds = [];
-  if (pay) { pay.state = 'Paid'; pay.lastEventAt = now(); pay.events.push({ op: 'EVT-' + pay.id.slice(4) + 's', at: now(), type: 'payment.succeeded (simulated)', status: 'Processed' }); }
+  if (pay) { pay.state = 'Paid'; pay.lastEventAt = now(); pay.events.push({ op: 'EVT-' + pay.id.slice(4) + 's', at: now(), type: via ? 'payment.succeeded' : 'payment.succeeded (simulated)', status: 'Processed' }); }
   for (const it of p.items) {
     const listing = d.listings.find(l => l.id === it.listingId);
     const offer = it.offerId ? d.offers.find(o => o.id === it.offerId) : null;
     const pkg = offer ? listing.packages[0] : listing.packages.find(x => x.id === it.pkgId);
-    const o = createOrder(d, { buyerId: p.buyerId, listing, pkg, count: it.count, requirements: it.requirements, purchaseRef: p.id, method: p.method, offer, payRef: pay?.id });
+    const o = createOrder(d, { buyerId: p.buyerId, listing, pkg, count: it.count, requirements: it.requirements, purchaseRef: p.id, method: p.method, offer, payRef: pay?.id, via });
     p.orderIds.push(o.id);
     if (offer) {
       offer.status = 'Paid'; offer.orderId = o.id;
@@ -147,8 +148,43 @@ export function completePurchase(d, purchaseId) {
   }
   if (pay) pay.orderIds = p.orderIds;
   if (p.fromCart) d.carts[p.buyerId] = (d.carts[p.buyerId] || []).filter(ci => !p.cartIds.includes(ci.id));
-  notify(d, p.buyerId, 'buyer', `Payment confirmed for ${p.id} (simulated). ${p.orderIds.length} order${p.orderIds.length > 1 ? 's' : ''} created.`, { page: 'u-orders' });
+  notify(d, p.buyerId, 'buyer', `Payment confirmed for ${p.id}${via ? '' : ' (simulated)'}. ${p.orderIds.length} order${p.orderIds.length > 1 ? 's' : ''} created.`, { page: 'u-orders' });
   return p;
+}
+
+// A verified event from a real payment provider (the API has already checked its signature).
+// status: 'processing' | 'paid' | 'partial' | 'failed' | 'expired' | 'refunded'. Each provider
+// payment and status is processed once. Orders are created only for a pending purchase paid in
+// full at its exact USD amount; every other receipt goes to reconciliation for Finance.
+export function paymentProviderEvent(d, { provider, purchaseId, ref, status, priceC, cur, paid = '' }) {
+  const p = d.purchases.find(x => x.id === purchaseId); const pay = p && d.payments.find(x => x.purchaseId === p.id);
+  if (!p || !pay || p.provider !== provider) return 'unknown';
+  const key = `${provider}:${ref}:${status}`;
+  const event = (type, result = 'Processed') => { pay.events.push({ op: key, at: now(), type, status: result }); pay.lastEventAt = now(); };
+  if (d.processedOps.includes(key)) { event(`payment.${status} (repeat)`, 'Duplicate ignored'); return 'duplicate'; }
+  d.processedOps.push(key);
+  const recon = (type, detail) => {
+    d.recon.push({ id: nid(d, 'RC'), type, paymentId: pay.id, ref: String(ref), amountC: priceC, status: 'Open', at: now(), detail, receipt: { ref: String(ref), amount: paid, network: provider, verified: true } });
+    snotify(d, staffWith(d, 'payments.reconcile'), 'Reconciliation', `${type} on ${p.id}: ${detail}`, { page: 'a-recon' });
+    event(`payment.${status}`, 'Sent to reconciliation'); return 'reconciliation';
+  };
+  if (status === 'paid') {
+    if (p.status === 'Paid') return recon('Duplicate payment', `${provider} confirmed a second payment (${paid}) for ${p.id}, which is already paid. No order was created for it.`);
+    if (cur !== 'USD' || priceC !== toC(p.total)) return recon('Amount mismatch', `${provider} confirmed ${fmtMoney(priceC)} ${cur} for ${p.id}; the purchase total is ${fmtMoney(toC(p.total))}. No order was created.`);
+    if (p.status !== 'Pending') return recon('Late confirmation', `${provider} confirmed ${paid} for ${p.id} after the purchase was ${p.status.toLowerCase()}. No order was created.`);
+    pay.providerPaymentRef = String(ref); completePurchase(d, p.id, provider); return 'paid';
+  }
+  if (status === 'partial') {
+    cnotify(d, p.buyerId, 'buyer', `We received less than the full amount for ${p.id}. No order was created. Contact support to complete or return the payment.`, { page: 'pay-result', id: p.id });
+    return recon('Crypto underpayment', `${paid} received for ${p.id} (expected ${fmtMoney(toC(p.total))}). No order was created.`);
+  }
+  if (status === 'processing') { if (p.status === 'Pending') pay.state = 'Processing'; event('payment.confirming'); return 'processing'; }
+  if (status === 'failed' || status === 'expired') {
+    if (p.status === 'Pending') { p.status = pay.state = status === 'failed' ? 'Failed' : 'Expired'; cnotify(d, p.buyerId, 'buyer', `Payment ${p.id} ${status === 'failed' ? 'failed' : 'expired'}. No order was created.`, { page: 'pay-result', id: p.id }); }
+    event(`payment.${status}`); return status;
+  }
+  if (status === 'refunded') return recon('Provider refund', `${provider} reports ${paid} for ${p.id} was returned to the payer. Check the purchase and its orders.`);
+  return 'ignored';
 }
 
 export function refreshOfferExpiry(d) {
