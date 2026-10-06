@@ -98,7 +98,7 @@ function Conversation({ c, side, onBack }) {
     {c.blocked ? <div className="composer blocked"><Notice tone="warn">You blocked this profile. New messages and offers are stopped; order, delivery and case actions stay available in their own pages.</Notice></div> :
       <div className="composer">
         <div className="comp-tools"><button className="iconbtn sm" aria-label="Bold" onClick={() => wrap('**')}><Icon n="bold" s={16} /></button><button className="iconbtn sm" aria-label="Bulleted list" onClick={bullet}><Icon n="list" s={16} /></button>
-          <FilePicker compact files={files} setFiles={setFiles} label="Attach" />
+          <FilePicker upload compact files={files} setFiles={setFiles} label="Attach" />
           {side === 'seller' ? <Btn size="sm" v="ghost" icon="sparkle" onClick={() => setModal('offer')}>Create offer</Btn> : listing && <Btn size="sm" v="ghost" icon="sparkle" onClick={() => nav({ page: 'product', id: listing.id, openOffer: true })}>Request custom offer</Btn>}</div>
         <div className="comp-row"><textarea ref={ta} rows="2" aria-label="Message" placeholder="Write a message. **bold** and • bullets supported" value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send(); }} />
           <Btn v="primary" icon="send" onClick={send} disabled={!text.trim() && !files.length}>Send</Btn></div>
@@ -207,7 +207,7 @@ export function CaseDetail() {
       <div className="stack">
         <Section title="Report"><KV items={[['Reason', c.reason], ['Requested outcome', c.outcome]]} /><p>{c.description}</p></Section>
         <Section title="Responses"><ul className="responses">{(c.staffMsgs || []).map((r, i) => <li key={'s' + i} className="staff"><div className="row-gap"><span className="staff-tag">Marketplace support</span><span className="xs muted">{fmtDT(r.at)}</span></div><p className="small">{r.text}</p></li>)}{c.responses.map((r, i) => <li key={i} className={r.from === side ? 'me' : ''}><div className="row-gap"><Avatar name={r.from === 'buyer' ? buyer.name : st.name} hue={r.from === 'buyer' ? buyer.hue : st.hue} size={26} square={r.from === 'seller'} /><b className="small">{r.from === 'buyer' ? buyer.name : st.name}</b><span className="xs muted">{fmtDT(r.at)}</span></div><p className="small">{r.text}</p>{r.files?.length > 0 && <div className="msg-files">{r.files.map((f, j) => <FileChip key={j} f={f} />)}</div>}</li>)}</ul>
-          {c.status !== 'Closed' && <div className="case-reply"><Field label="Add a response"><textarea rows="3" value={text} onChange={e => setText(e.target.value)} /></Field><FilePicker files={files} setFiles={setFiles} label="Attach evidence" />
+          {c.status !== 'Closed' && <div className="case-reply"><Field label="Add a response"><textarea rows="3" value={text} onChange={e => setText(e.target.value)} /></Field><FilePicker upload files={files} setFiles={setFiles} label="Attach evidence" />
             <div className="row-gap"><Btn v="primary" disabled={!text.trim()} onClick={async () => { const r = await perform('caseRespond', { caseId: c.id, text: text.trim(), files }, d => A.caseRespond(d, d.cases.find(x => x.id === c.id), side, text.trim(), files), 'Response added'); if (r.ok) { setText(''); setFiles([]); } }}>Send response</Btn>
               {side === 'seller' && !closed && !c.remedy && <Btn onClick={() => setModal('propose')}>Propose remedy</Btn>}
               {!closed && c.status !== 'Escalated' && <Btn v="ghost" onClick={() => setModal('escalate')}>Escalate</Btn>}

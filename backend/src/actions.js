@@ -7,6 +7,7 @@ import * as A from '@crateline/domain/actions.js';
 import * as O from '@crateline/domain/ops.js';
 import * as SL from '@crateline/domain/seller.js';
 import { config } from './config.js';
+import { filesEnabled, MAX_FILE_BYTES } from './files.js';
 
 const { DomainError } = F;
 const fail = (m, code = 'rejected') => { throw new DomainError(m, code); };
@@ -31,7 +32,21 @@ const str = (v, name, min = 1) => { if (typeof v !== 'string' || !v.trim()) inva
 const int = (v, name) => { if (!Number.isInteger(v) || v <= 0) invalid(`${name} must be a positive whole number.`, name); return v; };
 const sim = () => { if (!config.simulateProviders) fail('Simulated provider events are disabled on this server.', 'denied'); };
 const CRYPTO_NETS = ['USDT on Tron (TRC-20)', 'USDT on Ethereum (ERC-20)', 'USDC on Base'];
-const file = f => f && typeof f.name === 'string' ? { name: f.name.slice(0, 200), size: Math.max(0, Math.min(Number(f.size) || 0, 60 * 1048576)) } : null;
+// An attachment. With file storage on, it must be a file this customer uploaded (POST /api/files)
+// and has not attached before; `kind` records where it went, which decides who may download it.
+// Without file storage, attachments are simulated: name and size only.
+const file = (d, u, f, kind) => {
+  if (!f || typeof f !== 'object') return null;
+  if (typeof f.id === 'string') {
+    const rec = d.files?.[f.id]; if (!rec || rec.ownerId !== u.id) fail('An attached file was not found. Attach it again.', 'validation');
+    if (rec.status !== 'ready') fail(`${rec.name} has not finished uploading. Attach it again.`, 'validation');
+    if (rec.attached) fail(`${rec.name} is already attached elsewhere. Upload it again.`, 'validation');
+    rec.attached = kind; return { id: rec.id, name: rec.name, size: rec.size };
+  }
+  if (filesEnabled()) fail('An attached file was not uploaded. Attach it again.', 'validation');
+  return typeof f.name === 'string' ? { name: f.name.slice(0, 200), size: Math.max(0, Math.min(Number(f.size) || 0, MAX_FILE_BYTES)) } : null;
+};
+const fileList = (d, u, files, kind) => (Array.isArray(files) ? files : []).slice(0, 10).map(f => file(d, u, f, kind)).filter(Boolean);
 
 // ---------- customer actions: actor is a user record
 export const customer = {
@@ -73,16 +88,16 @@ export const customer = {
   confirmPayment(d, u, { purchaseId }) { sim(); const p = d.purchases.find(x => x.id === purchaseId && x.buyerId === u.id) || fail('Purchase not found.', 'not_found'); if (p.status !== 'Pending') fail(`Purchase is ${p.status}.`); L.completePurchase(d, p.id); return { status: 'Paid' }; },
   submitInfo(d, u, { orderId, text }) { const o = asBuyer(d, u, orderId); if (o.status !== 'awaiting_info') fail('This order is not waiting for information.'); A.submitInfo(d, o, str(text, 'Information', 3)); },
   confirmReceived(d, u, { orderId }) { const o = asBuyer(d, u, orderId); if (o.status !== 'delivered') fail('Only a delivered order can be confirmed.'); if (L.openCase(d, o)) fail('Resolve the open case first.'); A.confirmReceived(d, o); },
-  requestReplacement(d, u, { orderId, reason, files = [] }) { const o = asBuyer(d, u, orderId); if (o.status !== 'delivered') fail('Replacements can be requested on delivered orders.'); A.requestReplacement(d, o, str(reason, 'Reason', 5), files.map(file).filter(Boolean)); },
-  openCase(d, u, { orderId, reason, description, outcome, files = [] }) { const o = asBuyer(d, u, orderId); if (L.openCase(d, o)) fail('A case is already open on this order.'); if (['cancelled', 'refunded', 'unpaid', 'awaiting_info'].includes(o.status)) fail('This order cannot be reported in its current state.'); return { caseId: A.createCase(d, o, { reason: str(reason, 'Reason'), description: str(description, 'Description', 15), outcome: str(outcome, 'Requested outcome'), files: files.map(file).filter(Boolean) }) }; },
-  caseRespond(d, u, { caseId, text, files = [] }) { const c = caseOf(d, caseId); const side = c.buyerId === u.id ? 'buyer' : u.storeId === c.storeId ? 'seller' : fail('Not your case.', 'denied'); if (c.status === 'Closed') fail('The case is closed.'); A.caseRespond(d, c, side, str(text, 'Response'), files.map(file).filter(Boolean)); },
+  requestReplacement(d, u, { orderId, reason, files = [] }) { const o = asBuyer(d, u, orderId); if (o.status !== 'delivered') fail('Replacements can be requested on delivered orders.'); A.requestReplacement(d, o, str(reason, 'Reason', 5), fileList(d, u, files, 'order')); },
+  openCase(d, u, { orderId, reason, description, outcome, files = [] }) { const o = asBuyer(d, u, orderId); if (L.openCase(d, o)) fail('A case is already open on this order.'); if (['cancelled', 'refunded', 'unpaid', 'awaiting_info'].includes(o.status)) fail('This order cannot be reported in its current state.'); return { caseId: A.createCase(d, o, { reason: str(reason, 'Reason'), description: str(description, 'Description', 15), outcome: str(outcome, 'Requested outcome'), files: fileList(d, u, files, 'case') }) }; },
+  caseRespond(d, u, { caseId, text, files = [] }) { const c = caseOf(d, caseId); const side = c.buyerId === u.id ? 'buyer' : u.storeId === c.storeId ? 'seller' : fail('Not your case.', 'denied'); if (c.status === 'Closed') fail('The case is closed.'); A.caseRespond(d, c, side, str(text, 'Response'), fileList(d, u, files, 'case')); },
   sendMessage(d, u, { conversationId, text, files = [] }) { const c = d.conversations.find(x => x.id === conversationId) || fail('Conversation not found.', 'not_found'); const side = c.buyerId === u.id ? 'buyer' : u.storeId === c.storeId ? 'seller' : fail('Not your conversation.', 'denied'); if (c.blocked) fail('This conversation is blocked.'); if (L.activeRestriction(u, 'messages')) fail('Messaging is restricted on your account.', 'denied');
-    const fs = (Array.isArray(files) ? files : []).slice(0, 10).map(file).filter(Boolean); const body = typeof text === 'string' ? text.trim().slice(0, 5000) : '';
+    const fs = fileList(d, u, files, 'conversation'); const body = typeof text === 'string' ? text.trim().slice(0, 5000) : '';
     if (!body && !fs.length) fail('Write a message or attach a file.', 'validation');
     L.pushMsg(d, c, side, body, fs.length ? { files: fs } : {});
     L.notify(d, side === 'buyer' ? d.stores[c.storeId].ownerId : c.buyerId, side === 'buyer' ? 'seller' : 'buyer', `New message from ${side === 'buyer' ? u.name : d.stores[c.storeId].name}.`, { page: 'inbox', id: c.id }); },
   startPreparation(d, u, { orderId }) { const o = asSeller(d, u, orderId); if (o.status !== 'paid') fail('Only a paid order can be started.'); A.startPrep(d, o); },
-  submitDelivery(d, u, { orderId, note, file: f, qty }) { const o = asSeller(d, u, orderId); const repl = o.replacement?.state === 'Requested'; if (!['preparing', 'partial'].includes(o.status) && !repl) fail('Start preparation before delivering.'); const remaining = repl ? o.totalQty : o.totalQty - L.deliveredQty(o); int(qty, 'Quantity'); if (qty > remaining) fail(`Quantity cannot exceed ${remaining}.`, 'validation'); A.submitDelivery(d, o, { note: str(note, 'Delivery note', 5), file: file(f) || fail('Attach the delivery file.', 'validation'), qty }); },
+  submitDelivery(d, u, { orderId, note, file: f, qty }) { const o = asSeller(d, u, orderId); const repl = o.replacement?.state === 'Requested'; if (!['preparing', 'partial'].includes(o.status) && !repl) fail('Start preparation before delivering.'); const remaining = repl ? o.totalQty : o.totalQty - L.deliveredQty(o); int(qty, 'Quantity'); if (qty > remaining) fail(`Quantity cannot exceed ${remaining}.`, 'validation'); A.submitDelivery(d, o, { note: str(note, 'Delivery note', 5), file: file(d, u, f, 'order') || fail('Attach the delivery file.', 'validation'), qty }); },
   requestBuyerInfo(d, u, { orderId, text }) { const o = asSeller(d, u, orderId); if (!['paid', 'preparing'].includes(o.status) || o.deliveries.length) fail('Information can be requested before delivery only.'); A.requestInfo(d, o, str(text, 'Request', 5)); },
   requestExtension(d, u, { orderId, days, reason }) { const o = asSeller(d, u, orderId); if (![1, 2, 3, 5, 7].includes(days)) fail('Choose 1, 2, 3, 5 or 7 days.', 'validation'); A.requestExtension(d, o, days, str(reason, 'Reason', 5)); },
   // Order responses between buyer and seller

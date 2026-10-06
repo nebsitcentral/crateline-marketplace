@@ -25,11 +25,12 @@ frontend/src/          React UI (Vite). app.jsx is the router and in-browser sto
   public.jsx auth.jsx buyer.jsx seller.jsx shared.jsx   Customer-facing screens
   admin-ui.jsx         Management shell, route permission map (ROUTES), lists, dialogs, previews
   admin-ops.jsx admin-fin.jsx super.jsx                 Admin and Super Admin screens
-  api.js               Client for the backend (not yet used by the screens)
+  api.js               Client for the backend (used when VITE_API_URL is set)
 backend/src/           Express API
   app.js               Routes: /health, /api/catalog, /api/auth/*, /api/state, /api/actions/:name
   actions.js           Whitelist of named actions for customers and staff
   views.js             What each caller may read (server-side filtering)
+  files.js             File storage on Cloudflare R2: signed upload and download URLs
   store.js             Memory store (dev, tests) or Postgres store (one versioned JSON document)
   migrate.js seed.js   Tables and demo fixtures
 backend/test/          node:test suites (domain rules and HTTP API)
@@ -131,9 +132,20 @@ Super Admins time travel, provider outcomes (`/api/demo/scenario`) and reset whi
    5-minute `mfa` ticket that only `/api/auth/mfa` accepts, codes cannot be reused, and recovery
    codes are stored hashed. Customers set it up in account settings, staff under Sign-in security.
    Requiring it for staff with money permissions is a business decision not yet made.
-3. File storage for deliveries and evidence (signed URLs; files never public).
+3. File storage for deliveries and evidence. **Done:** Cloudflare R2 (`backend/src/files.js`,
+   hand-written Signature V4 signed URLs, no SDK). `POST /api/files` records the file (`files`
+   table) and returns a 15-minute upload link; `POST /api/files/:id/complete` checks the stored
+   size; actions then accept `{ id }` as an attachment (owner only, once) for deliveries,
+   replacement requests, case evidence and messages. `GET /api/files/:id/url` gives a 5-minute
+   download link if the file appears in the caller's view; staff also need `orders.evidence` /
+   `cases.evidence` and each staff download is audited. Without the `R2_*` variables file storage
+   is off and attachments stay simulated. Still to do: delete unattached and expired files
+   (retention period is a business decision), virus scanning, listing/store images and avatars
+   (still simulated), seller verification documents (go to the KYC provider, Didit).
 4. Payment providers with verified webhooks feeding the same idempotent `processedOps` logic.
-5. Payout provider and reconciliation jobs. KYC provider for seller verification.
+   Chosen: NOWPayments (crypto). No card provider chosen yet.
+5. Payout provider and reconciliation jobs (NOWPayments mass payouts). KYC provider for seller
+   verification (Didit).
 6. Approved legal text for policies; confirm the Section 20 business decisions.
 
 ## Testing expectations

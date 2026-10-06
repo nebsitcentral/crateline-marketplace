@@ -47,6 +47,8 @@ export const TABLES = [
   { name: 'staff_invites', key: 'invites', order: 'newest', cols: { at } },
   { name: 'exports', key: 'exports', order: 'newest', cols: { at } },
   { name: 'provider_events', key: 'events', order: 'newest', cols: { at } },
+  // Uploaded files (deliveries, evidence, attachments): the record only; the bytes are in R2.
+  { name: 'files', key: 'files', order: 'map', cols: { owner_id: r => r.ownerId, at }, fk: { owner_id: 'users' } },
   { name: 'processed_ops', key: 'processedOps', order: 'oldest', values: true, cols: {} },
 ];
 export const TABLE_KEYS = new Set(TABLES.filter(t => t.key).map(t => t.key));

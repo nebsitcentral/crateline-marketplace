@@ -314,7 +314,7 @@ export function ReasonModal({ title, label, hint, cta, files: withFiles, onClose
   return <Modal title={title} onClose={onClose} footer={<><Btn v="ghost" onClick={onClose}>Cancel</Btn><Btn v="primary" disabled={r.trim().length < 5} onClick={() => { onDone(r.trim(), files); onClose(); }}>{cta}</Btn></>}>
     {hint && <p className="muted small">{hint}</p>}
     <Field label={label} required hint="At least 5 characters"><textarea rows="3" value={r} onChange={e => setR(e.target.value)} /></Field>
-    {withFiles && <FilePicker files={files} setFiles={setFiles} label="Attach evidence" />}</Modal>;
+    {withFiles && <FilePicker upload files={files} setFiles={setFiles} label="Attach evidence" />}</Modal>;
 }
 function ReportModal({ o, onClose }) {
   const { nav, perform } = useApp(); const [busy, setBusy] = useState(false);
@@ -324,7 +324,7 @@ function ReportModal({ o, onClose }) {
     <div className="form-grid"><Field label="Reason"><select value={v.reason} onChange={e => setV({ ...v, reason: e.target.value })}>{['Delivery does not match description', 'Items not working', 'Not delivered on time', 'Partial delivery', 'Other'].map(x => <option key={x}>{x}</option>)}</select></Field>
       <Field label="Requested outcome"><select value={v.outcome} onChange={e => setV({ ...v, outcome: e.target.value })}>{['Replacement', 'Partial refund', 'Full refund', 'Revised delivery'].map(x => <option key={x}>{x}</option>)}</select></Field></div>
     <Field label="Describe the problem" required hint="At least 15 characters. Be specific: which records or items, and how you checked."><textarea rows="4" value={v.description} onChange={e => setV({ ...v, description: e.target.value })} /></Field>
-    <FilePicker files={files} setFiles={setFiles} label="Attach evidence" /></Modal>;
+    <FilePicker upload files={files} setFiles={setFiles} label="Attach evidence" /></Modal>;
 }
 
 export function Following() {

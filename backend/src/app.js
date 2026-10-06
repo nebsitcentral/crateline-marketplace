@@ -15,6 +15,8 @@ import { currentTerms } from '@crateline/domain/logic.js';
 import { catalogView, customerView, staffView } from './views.js';
 import { customer as CUSTOMER, staff as STAFF } from './actions.js';
 import { seedStore } from './seed.js';
+import { filesEnabled, fileIdsIn, MAX_FILE_BYTES, BLOCKED_EXT, DOWNLOAD_TTL_S } from './files.js';
+import { can } from '@crateline/domain/fin.js';
 
 const STATUS = { unauthenticated: 401, denied: 403, not_found: 404, stale: 409, validation: 422, 'needs-decision': 422, rejected: 400 };
 
@@ -23,7 +25,7 @@ const newToken = () => crypto.randomBytes(32).toString('base64url');
 const hashToken = t => crypto.createHash('sha256').update(String(t)).digest('hex');
 const HOUR_MS = 3600e3;
 
-export function createApp(store, { transport = null } = {}) {
+export function createApp(store, { transport = null, storage = null } = {}) {
   // Deliver queued email soon after a request queues it; the interval worker in index.js retries.
   let sending = null;
   const kick = () => { if (transport && !sending) sending = processOutbox(store, transport).catch(e => console.error('email send failed', e)).finally(() => { sending = null; }); };
@@ -66,7 +68,7 @@ export function createApp(store, { transport = null } = {}) {
     return rec;
   };
 
-  app.get('/health', wrap(async (req, res) => res.json({ ok: true, store: store.kind, simulateProviders: config.simulateProviders, demoControls: config.allowDemoControls, email: config.emailTransport, version: (process.env.RAILWAY_GIT_COMMIT_SHA || '').slice(0, 7) || 'local' })));
+  app.get('/health', wrap(async (req, res) => res.json({ ok: true, store: store.kind, simulateProviders: config.simulateProviders, demoControls: config.allowDemoControls, email: config.emailTransport, files: storage ? config.fileStorage : 'off', version: (process.env.RAILWAY_GIT_COMMIT_SHA || '').slice(0, 7) || 'local' })));
 
   app.get('/api/catalog', wrap(async (req, res) => { const { doc } = await store.read(); res.json(catalogView(doc)); }));
 
@@ -288,6 +290,58 @@ export function createApp(store, { transport = null } = {}) {
     if (!acc || !(await bcrypt.compare(String(password || ''), acc.hash))) throw Object.assign(new DomainError('Your password is incorrect.', 'validation'), { field: 'password' });
     const { version } = await store.transact(d => addPayoutMethod(d, actorFrom(d, req.auth), method));
     res.status(201).json({ ok: true, version });
+  }));
+
+  // ---------- files (deliveries, evidence, message attachments)
+  // 1. POST /api/files records the file and returns a signed URL; the browser uploads to it.
+  // 2. POST /api/files/:id/complete checks the stored size, after which an action can attach it.
+  // 3. GET /api/files/:id/url returns a short-lived download link to callers who may see the file.
+  const needFiles = () => { if (!storage || !filesEnabled()) throw new DomainError('File storage is not set up on this server yet.', 'rejected'); };
+  const MAX_UNATTACHED = 20; // per customer per hour: uploads not yet attached to anything
+  app.post('/api/files', auth(), wrap(async (req, res) => {
+    needFiles(); if (req.auth.kind !== 'user') throw new DomainError('Only customer accounts upload files.', 'denied');
+    const { name, size, type = '' } = req.body || {};
+    const invalid = msg => { throw Object.assign(new DomainError(msg, 'validation'), { field: 'file' }); };
+    if (typeof name !== 'string' || !name.trim() || name.length > 200) invalid('The file needs a name of up to 200 characters.');
+    if (BLOCKED_EXT.test(name)) invalid(`${name} was blocked. Executable files are not allowed.`);
+    if (!Number.isInteger(size) || size <= 0) invalid(`${name} is empty.`);
+    if (size > MAX_FILE_BYTES) invalid(`${name} is too large. The limit is 60 MB per file.`);
+    const id = 'FL-' + crypto.randomBytes(12).toString('base64url');
+    const key = `files/${id}/${name.trim().replace(/[^\w.-]/g, '_')}`;
+    await store.transact(d => {
+      const u = actorFrom(d, req.auth); d.files = d.files || {};
+      if (Object.values(d.files).filter(f => f.ownerId === u.id && !f.attached && f.at > Date.now() - HOUR_MS).length >= MAX_UNATTACHED) invalid('You have uploaded many files without sending them. Wait an hour and try again.');
+      d.files[id] = { id, ownerId: u.id, name: name.trim(), size, type: String(type).slice(0, 100), key, status: 'pending', attached: null, at: Date.now() };
+    });
+    res.status(201).json({ id, name: name.trim(), size, upload: { method: 'PUT', url: storage.putUrl(key), headers: type ? { 'Content-Type': String(type).slice(0, 100) } : {} } });
+  }));
+  app.post('/api/files/:id/complete', auth(), wrap(async (req, res) => {
+    needFiles();
+    const { doc } = await store.read(); const rec = doc.files?.[req.params.id];
+    if (!rec || req.auth.kind !== 'user' || rec.ownerId !== actorFrom(doc, req.auth).id) throw new DomainError('File not found.', 'not_found');
+    if (rec.status !== 'ready') {
+      const stored = await storage.head(rec.key);
+      if (!stored) throw new DomainError(`${rec.name} did not finish uploading. Attach it again.`, 'rejected');
+      // The stored file must be the one that was announced; anything else is removed.
+      if (stored.size !== rec.size) { await storage.remove(rec.key); await store.transact(d => { delete d.files[rec.id]; }); throw new DomainError(`${rec.name} did not upload correctly. Attach it again.`, 'rejected'); }
+      await store.transact(d => { d.files[rec.id].status = 'ready'; });
+    }
+    res.json({ ok: true, file: { id: rec.id, name: rec.name, size: rec.size } });
+  }));
+  // Staff need the evidence permission for where the file is attached; each staff download is audited.
+  const STAFF_FILE_PERMS = { order: ['orders.evidence'], case: ['cases.evidence'], conversation: ['orders.evidence', 'cases.evidence'] };
+  app.get('/api/files/:id/url', auth(), wrap(async (req, res) => {
+    needFiles();
+    const { doc } = await store.read(); const actor = actorFrom(doc, req.auth); const rec = doc.files?.[req.params.id];
+    const denied = () => { throw new DomainError('File not found, or your account cannot open it.', 'not_found'); };
+    if (!rec || rec.status !== 'ready') denied();
+    const mine = req.auth.kind === 'user' && rec.ownerId === actor.id;
+    if (!mine && !fileIdsIn(viewFor(doc, req.auth)).has(rec.id)) denied();
+    if (req.auth.kind === 'staff') {
+      if (!(STAFF_FILE_PERMS[rec.attached] || []).some(p => can(doc, actor, p))) throw new DomainError('Access denied. Your role cannot open evidence files.', 'denied');
+      await store.transact(d => { audit(d, d.staff[actor.id], 'File downloaded', rec.id, { reason: rec.name, sensitive: true }); });
+    }
+    res.json({ url: storage.getUrl(rec.key, rec.name), name: rec.name, expiresIn: DOWNLOAD_TTL_S });
   }));
 
   // Lists that grow without limit are capped in /api/state (newest first); older entries come

@@ -16,9 +16,10 @@ Seller panel, and Admin and Super Admin management panels.
 * **Backend:** working API with accounts (bcrypt + JWT), Postgres persistence, server-side
   permission checks, role-filtered data, and the money, refund, payout, dispute and moderation
   transitions. Covered by tests (`npm test`).
-* **Not yet done:** the frontend screens still read the in-browser demo store; they are not yet
-  switched over to the API. `CLAUDE.md` contains the step-by-step plan (Phase 2) for doing that
-  with Claude Code. Real payment, payout, KYC and email providers are not integrated.
+* **Connected:** with `VITE_API_URL` set, every screen reads and writes through the API. Email
+  (Brevo), two-factor sign-in and file storage (Cloudflare R2) are real once their keys are set.
+* **Not yet done:** payment, payout and KYC providers are simulated. `CLAUDE.md` lists the
+  remaining work (Phase 3).
 
 ## Requirements
 
@@ -69,9 +70,30 @@ Demo logins seeded in the API all use the password in `SEED_DEMO_PASSWORD`, for 
    * `DATA_ENCRYPTION_KEY` = a long random string that encrypts two-factor secrets. Keep it
      stable: changing it breaks existing two-factor set-ups. If unset, one is derived from
      `JWT_SECRET`, so rotating `JWT_SECRET` would have the same effect.
+   * File storage on Cloudflare R2: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`,
+     `R2_BUCKET` (see "File storage" below). Without them, attachments stay simulated.
 5. **Settings → Networking → Generate Domain**. Check `https://<your-domain>/health`.
 
 On first start the API creates its tables and loads the demo fixtures.
+
+## File storage (Cloudflare R2)
+
+Delivery files, case evidence and message attachments are uploaded by the browser straight to a
+private R2 bucket with a 15-minute signed link, and downloaded with a 5-minute link that the API
+gives only to people who may see the file. Files are limited to 60 MB; executables are refused.
+
+1. Cloudflare dashboard → **R2 → Create bucket** (for example `crateline-files`). Keep public
+   access off.
+2. **R2 → Manage API tokens → Create API token**: permission **Object Read & Write**, limited to
+   that bucket. Copy the Access Key ID and Secret Access Key. The Account ID is on the R2 overview.
+3. Bucket → **Settings → CORS policy**, with your website origin:
+
+   ```json
+   [{ "AllowedOrigins": ["https://yourname.github.io", "http://localhost:5173"],
+      "AllowedMethods": ["PUT", "GET"], "AllowedHeaders": ["content-type"], "MaxAgeSeconds": 3600 }]
+   ```
+4. Set the four `R2_*` variables on the Railway `backend` service (and in `backend/.env` locally).
+   `/health` then reports `"files": "r2"`.
 
 ## Deploy the frontend to GitHub Pages
 

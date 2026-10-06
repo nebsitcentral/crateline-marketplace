@@ -344,12 +344,13 @@ export function SOrder() {
   </>;
 }
 function DeliverModal({ o, repl, remaining, onClose, onDone }) {
+  const { fileMode } = useApp();
   const [note, setNote] = useState(''); const [files, setFiles] = useState([]); const [qty, setQty] = useState(String(remaining)); const [err, setErr] = useState(''); const [step, setStep] = useState('form');
   function check() { if (!files.length) return setErr('Attach the delivery file or service evidence.'); if (!(+qty > 0) || +qty > remaining) return setErr(`Quantity must be between 1 and ${fmtN(remaining)}.`); if (note.trim().length < 5) return setErr('Add a delivery note for the buyer.'); setErr(''); setStep('preview'); }
   return <Modal title={repl ? 'Submit replacement delivery' : 'Submit delivery'} onClose={onClose} footer={step === 'form' ? <><Btn v="ghost" onClick={onClose}>Cancel</Btn><Btn v="primary" onClick={check}>Preview submission</Btn></> : <><Btn v="ghost" onClick={() => setStep('form')}>Edit</Btn><Btn v="primary" onClick={() => { onDone({ note: note.trim(), file: files[0], qty: +qty }); onClose(); }}>Confirm delivery</Btn></>}>
     {step === 'form' ? <>
-      <Notice tone="info"><Sim>Simulated upload</Sim> Files are not uploaded. Delivery appears in the buyer’s order as a new version; earlier versions are kept.</Notice>
-      <FilePicker files={files} setFiles={setFiles} multiple={false} label="Attach delivery file" />
+      <Notice tone="info">{fileMode === 'r2' ? 'The file is stored privately; only you, the buyer and authorised marketplace staff can download it.' : <><Sim>Simulated upload</Sim> Files are not uploaded.</>} Delivery appears in the buyer’s order as a new version; earlier versions are kept.</Notice>
+      <FilePicker upload files={files} setFiles={setFiles} multiple={false} label="Attach delivery file" />
       <Field label={`Quantity delivered (${o.snap.unit})`} hint={`${fmtN(remaining)} ${repl ? 'in replacement scope' : 'remaining'}. Less than this records a partial delivery.`}><input type="number" value={qty} onChange={e => setQty(e.target.value)} /></Field>
       <Field label="Delivery note" required><textarea rows="3" value={note} onChange={e => setNote(e.target.value)} placeholder="What is included, how to use it, validation results" /></Field>
       {err && <p className="ferr" role="alert">{err}</p>}</> :

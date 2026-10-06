@@ -1,6 +1,5 @@
-// Thin client for the Crateline API (backend/). The current screens still run on the
-// in-browser demo store; this client is the starting point for wiring them to the API.
-// See CLAUDE.md, "Phase 2: connect the frontend to the API".
+// Thin client for the Crateline API (backend/). Used when VITE_API_URL is set; without it the
+// app runs in demo mode on the in-browser store.
 const BASE = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 export const apiEnabled = !!BASE;
 let token = null;
@@ -41,6 +40,21 @@ export const api = {
   changeEmail: (newEmail, password) => call('/api/auth/email/change', { method: 'POST', body: { newEmail, password } }),
   confirmEmail: token => call('/api/auth/email/confirm', { method: 'POST', body: { token } }),
   list: (resource, after, limit = 50) => call(`/api/list/${resource}?limit=${limit}${after ? '&after=' + encodeURIComponent(after) : ''}`),
+  // Files: announce the file, upload it straight to storage with the signed URL, then confirm.
+  // Resolves to { id, name, size }, which actions accept as an attachment.
+  upload: async (f, onProgress = () => { }) => {
+    const r = await call('/api/files', { method: 'POST', body: { name: f.name, size: f.size, type: f.type || '' } });
+    await new Promise((done, fail) => {
+      const x = new XMLHttpRequest(); x.open(r.upload.method, r.upload.url);
+      for (const [k, v] of Object.entries(r.upload.headers || {})) x.setRequestHeader(k, v);
+      x.upload.onprogress = e => { if (e.lengthComputable) onProgress(Math.round(e.loaded / e.total * 100)); };
+      x.onload = () => x.status >= 200 && x.status < 300 ? done() : fail(new Error(`${f.name} could not be uploaded (storage answered ${x.status}). Try again.`));
+      x.onerror = () => fail(new Error(`${f.name} could not be uploaded. Check your connection and try again.`));
+      x.send(f);
+    });
+    return (await call(`/api/files/${r.id}/complete`, { method: 'POST' })).file;
+  },
+  fileUrl: id => call(`/api/files/${id}/url`),
   addPayoutMethod: body => call('/api/payout-methods', { method: 'POST', body }),
   // Demo controls: Super Admin only, and only while the server allows them (ALLOW_DEMO_CONTROLS).
   demoAdvance: ms => call('/api/demo/advance', { method: 'POST', body: { ms } }),

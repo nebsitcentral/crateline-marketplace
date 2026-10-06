@@ -130,7 +130,9 @@ function App() {
   useEffect(() => { if (apiEnabled) refresh(); }, []);
   // API mode: how the server sends email ('brevo', 'log' for development, or 'off').
   const [emailMode, setEmailMode] = useState(apiEnabled ? null : 'demo');
-  useEffect(() => { if (apiEnabled) api.health().then(h => setEmailMode(h.email || 'off')).catch(() => setEmailMode('off')); }, []);
+  // API mode: 'r2' when the server stores files; otherwise attachments stay simulated.
+  const [fileMode, setFileMode] = useState(apiEnabled ? 'off' : 'demo');
+  useEffect(() => { if (apiEnabled) api.health().then(h => { setEmailMode(h.email || 'off'); setFileMode(h.files || 'off'); }).catch(() => setEmailMode('off')); }, []);
   // Links from emails arrive as ?verify=, ?reset= or ?email=. Open the matching page and remove
   // the token from the address bar so it is not kept in history or shared by accident.
   useEffect(() => {
@@ -225,7 +227,7 @@ function App() {
 
   if (import.meta.env.DEV) window.__crateline = { db: () => dbRef.current }; // dev-only inspection hook
   const db = dbRef.current; const me = userId ? db.users[userId] : null; const staff = staffId ? db.staff[staffId] : null;
-  const ctx = { db, me, staff, mode, route, nav, update, act, toast, refresh, apiSignIn, perform, withInline, more, loadMore, emailMode, requireAuth, signIn, signOut, switchMode, setAccount, resetDemo, advance, setScenario, pendingIntent, listState, evidenceOpen, openPreview: setPreview };
+  const ctx = { db, me, staff, mode, route, nav, update, act, toast, refresh, apiSignIn, perform, withInline, more, loadMore, emailMode, fileMode, requireAuth, signIn, signOut, switchMode, setAccount, resetDemo, advance, setScenario, pendingIntent, listState, evidenceOpen, openPreview: setPreview };
   const p = route.page;
   let body;
   if (apiStatus !== 'ready') {

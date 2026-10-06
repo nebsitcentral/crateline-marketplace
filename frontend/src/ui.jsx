@@ -1,6 +1,7 @@
 import React from 'react';
 import { CAT_HUE, SUBS } from '@crateline/domain/data.js';
 import { fmtDT, fmtSize, rel, money, fmtN, PROGRESS, STATUS_LABEL, STATUS_TONE, listingStats, storeStats, startPrice, minQty, minDays, days } from '@crateline/domain/logic.js';
+import { api, apiEnabled } from './api.js';
 const { useState, useEffect, useRef, createContext, useContext } = React;
 
 export const AppCtx = createContext(null);
@@ -184,21 +185,30 @@ export function Timeline({ events }) {
 }
 
 export function FileChip({ f, onRemove, locked }) {
+  const { toast } = useApp(); const [busy, setBusy] = useState(false);
   const ext = (f.name.split('.').pop() || '').toUpperCase();
+  // Stored files open through a short-lived link the server gives only to people allowed to see them.
+  const download = async () => { setBusy(true); try { const r = await api.fileUrl(f.id); window.location.assign(r.url); } catch (e) { toast(e.message || 'The file could not be opened.', 'bad'); } setBusy(false); };
   return <div className="filechip"><span className="fc-ext">{ext.slice(0, 4)}</span><div className="fc-main"><b>{f.name}</b><span className="muted xs">{fmtSize(f.size)}{locked ? ' · Private to order participants' : ''}</span></div>
-    {onRemove ? <button className="iconbtn sm" onClick={onRemove} aria-label={'Remove ' + f.name}><Icon n="x" s={15} /></button> : <span className="sim">Preview only</span>}</div>;
+    {onRemove ? <button className="iconbtn sm" onClick={onRemove} aria-label={'Remove ' + f.name}><Icon n="x" s={15} /></button> : f.id && apiEnabled ? <Btn size="sm" v="ghost" disabled={busy} onClick={download}>{busy ? 'Opening…' : 'Download'}</Btn> : <span className="sim">Preview only</span>}</div>;
 }
-// Simulated attachment: reads name and size only; nothing is uploaded.
+// With `upload` and file storage on the server, files are uploaded privately and the list holds
+// { id, name, size }. Otherwise the attachment is simulated: name and size only, nothing uploaded.
 export const LIMIT = 60 * 1048576;
-export function FilePicker({ files, setFiles, multiple = true, label = 'Attach file', compact }) {
+export function FilePicker({ files, setFiles, multiple = true, label = 'Attach file', compact, upload = false }) {
+  const { fileMode } = useApp(); const real = upload && fileMode === 'r2';
   const [busy, setBusy] = useState(null); const [err, setErr] = useState('');
   const inp = useRef();
-  function add(list) {
+  async function add(list) {
     setErr('');
     for (const f of list) {
       if (f.size > LIMIT) { setErr(`${f.name} is ${fmtSize(f.size)}. The limit is 60 MB per file.`); continue; }
       if (/\.(exe|bat|cmd|scr|js|msi)$/i.test(f.name)) { setErr(`${f.name} was blocked. Executable files are not allowed.`); continue; }
-      start({ name: f.name, size: f.size });
+      if (!real) { start({ name: f.name, size: f.size }); continue; }
+      setBusy({ name: f.name, p: 0 });
+      try { const done = await api.upload(f, p => setBusy({ name: f.name, p })); setFiles(prev => multiple ? [...prev, done] : [done]); }
+      catch (e) { setErr(e.message || `${f.name} could not be uploaded. Try again.`); }
+      setBusy(null);
     }
   }
   function start(f) {
@@ -208,9 +218,9 @@ export function FilePicker({ files, setFiles, multiple = true, label = 'Attach f
   return <div className={'filepick' + (compact ? ' compact' : '')}>
     <input ref={inp} type="file" hidden multiple={multiple} onChange={e => { add([...e.target.files]); e.target.value = ''; }} />
     <div className="fp-row">
-      <Btn size="sm" icon="clip" onClick={() => inp.current.click()}>{label}</Btn>
-      {!compact && <Btn size="sm" v="ghost" onClick={() => start({ name: 'sample_evidence_' + (files.length + 1) + '.pdf', size: 845000 + files.length * 120000 })}>Use sample file</Btn>}
-      <span className="muted xs">Max 60 MB per file · <Sim>Not uploaded</Sim></span>
+      <Btn size="sm" icon="clip" disabled={!!busy} onClick={() => inp.current.click()}>{label}</Btn>
+      {!compact && !real && <Btn size="sm" v="ghost" onClick={() => start({ name: 'sample_evidence_' + (files.length + 1) + '.pdf', size: 845000 + files.length * 120000 })}>Use sample file</Btn>}
+      <span className="muted xs">Max 60 MB per file · {real ? 'Stored privately' : <Sim>Not uploaded</Sim>}</span>
     </div>
     {busy && <div className="fp-progress"><span className="xs">{busy.name}</span><div className="bar"><i style={{ width: busy.p + '%' }} /></div></div>}
     {err && <div className="ferr" role="alert">{err} <button className="linkbtn" onClick={() => setErr('')}>Dismiss</button></div>}
