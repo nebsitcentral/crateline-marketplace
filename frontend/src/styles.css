@@ -7,7 +7,7 @@
   --blue:#79a7cb; --blue-ink:#3d6e95; --blue-soft:#e4eef6;
   --amber:#d2461f; --amber-soft:#fbe7e0;
   --ok:#2c7a4d; --ok-soft:#e1f1e7; --warn:#93580a; --warn-soft:#f8ecd6; --bad:#b9352a; --bad-soft:#f9e1de; --info:#3d6e95; --info-soft:#e4eef6;
-  --shadow:0 1px 2px rgba(21,26,45,.04); --shadow-lg:0 16px 48px rgba(21,26,45,.14); --art-l:50%; --art-c:.08; color-scheme:light;
+  --shadow:0 1px 2px rgba(21,26,45,.04); --shadow-lg:0 16px 48px rgba(21,26,45,.14); --art-l:50%; --art-c:.08; color-scheme:light; --logo-a:#000000; --logo-b:#7e7e7e;
   --f-display:'Manrope','Segoe UI',system-ui,-apple-system,sans-serif; --f-body:'Manrope','Segoe UI',system-ui,-apple-system,sans-serif; --f-mono:'JetBrains Mono',ui-monospace,Menlo,monospace;
   --r:18px; --r-lg:24px; --r-sm:12px; --r-xs:8px; --ease:cubic-bezier(.2,.7,.3,1);
 }
@@ -18,7 +18,7 @@
   --blue:#8fb8d8; --blue-ink:#9cc3e0; --blue-soft:#1c2a36;
   --amber:#ec6a46; --amber-soft:#3a2119;
   --ok:#6ccb92; --ok-soft:#17301f; --warn:#e2ad5c; --warn-soft:#372a14; --bad:#f08a7e; --bad-soft:#3a1c19; --info:#9cc3e0; --info-soft:#1c2a36;
-  --shadow:0 1px 2px rgba(0,0,0,.3); --shadow-lg:0 16px 48px rgba(0,0,0,.5); --art-l:24%; --art-c:.08; color-scheme:dark}}
+  --shadow:0 1px 2px rgba(0,0,0,.3); --shadow-lg:0 16px 48px rgba(0,0,0,.5); --art-l:24%; --art-c:.08; color-scheme:dark; --logo-a:#ffffff; --logo-b:#818181}}
 :root[data-theme="dark"]{
   --bg:#121419; --surface:#1b1e25; --surface-2:#22262e; --surface-3:#2d323c; --line:#2c3039; --line-2:#3a3f4a;
   --fg:#e9ebee; --fg-2:#c7cbd2; --muted:#9a9fa8; --ink:#e9ebee; --ink-fg:#151a2d;
@@ -26,7 +26,7 @@
   --blue:#8fb8d8; --blue-ink:#9cc3e0; --blue-soft:#1c2a36;
   --amber:#ec6a46; --amber-soft:#3a2119;
   --ok:#6ccb92; --ok-soft:#17301f; --warn:#e2ad5c; --warn-soft:#372a14; --bad:#f08a7e; --bad-soft:#3a1c19; --info:#9cc3e0; --info-soft:#1c2a36;
-  --shadow:0 1px 2px rgba(0,0,0,.3); --shadow-lg:0 16px 48px rgba(0,0,0,.5); --art-l:24%; --art-c:.08; color-scheme:dark}
+  --shadow:0 1px 2px rgba(0,0,0,.3); --shadow-lg:0 16px 48px rgba(0,0,0,.5); --art-l:24%; --art-c:.08; color-scheme:dark; --logo-a:#ffffff; --logo-b:#818181}
 
 *{box-sizing:border-box}
 html,body{background:var(--bg);color:var(--fg)}
@@ -537,7 +537,7 @@ section.card .table-wrap{border:0;border-top:1px solid var(--line);border-radius
 @media(max-width:600px){.demo-pill{padding:8px 12px;font-size:.8rem}}
 .card-h select{width:auto;max-width:220px}
 @media(max-width:760px){.tbl td>*{grid-column:2}.tbl td[data-label=""]>*{grid-column:1}.toolbar .searchbox{max-width:none;flex:1 1 100%}}
-@media(max-width:480px){.topbar .logo span{display:none}.mode-chip{font-size:.64rem;padding:2px 7px}.tb-row .iconbtn{width:34px}}
+@media(max-width:480px){.topbar .logo .logo-full{display:none}.topbar .logo .logo-mark{display:block}.mode-chip{font-size:.64rem;padding:2px 7px}.tb-row .iconbtn{width:34px}}
 
 /* ---------- Management panels share the same tokens as the customer panels */
 .demo-env{font-size:.7rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--amber);background:var(--amber-soft);border:1px dashed var(--amber);padding:3px 8px;border-radius:5px;white-space:nowrap}
@@ -761,7 +761,7 @@ section.card .table-wrap{border-top:1px solid var(--line)}
 .pub-header{background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:saturate(140%) blur(10px);border-bottom:1px solid transparent}
 .ph-row{height:68px}
 .logo{font-family:var(--f-body);font-weight:600;font-size:1.08rem;letter-spacing:-.025em}
-.logo svg{color:var(--accent-bright)}
+.logo svg{display:block} .logo .logo-mark{display:none}
 .searchbox{background:var(--surface);border:1px solid transparent;border-radius:999px;padding:0 5px 0 15px}
 .searchbox:focus-within{outline:0;border-color:color-mix(in srgb,var(--accent) 50%,var(--line));box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 12%,transparent)}
 .searchbox input{background:transparent!important;border:0!important;box-shadow:none!important;padding:10px 0}

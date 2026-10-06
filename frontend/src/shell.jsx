@@ -3,12 +3,17 @@ import { CATEGORIES } from '@crateline/domain/data.js';
 import * as AX from '@crateline/domain/actions.js';
 import { Icon, Btn, Avatar, useApp, NotificationList, Badge, Sim, Confirm } from './ui.jsx';
 import { api } from './api.js';
+import { LOGO_C, LOGO_REST } from './logo-paths.js';
 const { useState, useEffect, useRef } = React;
 
+// The wordmark: an orange "C" and the rest of the name in a gradient that follows the theme
+// (dark lettering on light backgrounds, light on dark; --logo-a and --logo-b in styles.css).
+// Narrow top bars show the "C" alone.
 export function Logo({ onClick }) {
+  const id = React.useId();
   return <button className="logo" onClick={onClick} aria-label="Crateline home">
-    <svg width="26" height="26" viewBox="0 0 32 32" aria-hidden="true"><rect x="3" y="9" width="26" height="19" rx="3" fill="var(--accent)" /><path d="M3 14h26" stroke="var(--bg)" strokeWidth="2" /><rect x="9" y="4" width="14" height="7" rx="2" fill="none" stroke="var(--accent)" strokeWidth="2.4" /><path d="M13 19h6" stroke="var(--bg)" strokeWidth="2.4" strokeLinecap="round" /></svg>
-    <span>Crateline</span></button>;
+    <svg className="logo-full" height="24" viewBox="64 29 217 36" aria-hidden="true"><defs><linearGradient id={id} x1="64" y1="43.5" x2="282" y2="43.5" gradientUnits="userSpaceOnUse"><stop stopColor="var(--logo-a)" /><stop offset="1" stopColor="var(--logo-b)" /></linearGradient></defs><path d={LOGO_C} fill="#FF6505" /><path d={LOGO_REST} fill={`url(#${id})`} /></svg>
+    <svg className="logo-mark" height="24" viewBox="64 29 27 29" aria-hidden="true"><path d={LOGO_C} fill="#FF6505" /></svg></button>;
 }
 
 function useOutside(ref, fn) { useEffect(() => { const h = e => { if (ref.current && !ref.current.contains(e.target)) fn(); }; document.addEventListener('mousedown', h); return () => document.removeEventListener('mousedown', h); }, []); }
