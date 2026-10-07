@@ -76,7 +76,7 @@ function NotesDrawer({ onClose }) {
 }
 
 export function AdminShell({ children }) {
-  const { db, staff, route, nav, update, toast, openPreview, perform, signOut } = useApp(); const [drawer, setDrawer] = useState(false); const [notes, setNotes] = useState(false); const [pm, setPm] = useState(false); const [security, setSecurity] = useState(false);
+  const { db, staff, route, nav, update, toast, openPreview, perform, signOut, demoEnv } = useApp(); const [drawer, setDrawer] = useState(false); const [notes, setNotes] = useState(false); const [pm, setPm] = useState(false); const [security, setSecurity] = useState(false);
   const role = roleOf(db, staff); const sup = isSuper(db, staff);
   const cur = ROUTES[route.page]; const active = cur?.[3] || route.page;
   const unread = db.staffNotes.filter(n => n.staffId === staff.id && !n.read).length;
@@ -101,7 +101,7 @@ export function AdminShell({ children }) {
     <header className="topbar"><div className="tb-row">
       <button className="iconbtn only-m" aria-label="Open navigation" onClick={() => setDrawer(true)}><Icon n="menu" /></button>
       <Logo onClick={() => nav({ page: homeFor(db, staff) })} />
-      <span className="demo-env" title="Every provider, identity, email and money action here is simulated">Demo environment</span>
+      {demoEnv && <span className="demo-env" title="Every provider, identity, email and money action here is simulated">Demo environment</span>}
       <div className="tb-search only-d"><GlobalSearch /></div>
       <nav className="ph-actions" aria-label="Staff">
         <button className="iconbtn" aria-label={`Notifications, ${unread} unread`} onClick={() => setNotes(true)}><Icon n="bell" />{unread > 0 && <span className="count">{unread}</span>}</button>

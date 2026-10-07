@@ -1,7 +1,7 @@
 import React from 'react';
 import { CATEGORIES } from '@crateline/domain/data.js';
 import * as AX from '@crateline/domain/actions.js';
-import { Icon, Btn, Avatar, useApp, NotificationList, Badge, Sim, Confirm } from './ui.jsx';
+import { Icon, Btn, Avatar, useApp, NotificationList, Badge, Sim, Confirm, Modal, Field, Notice } from './ui.jsx';
 import { api } from './api.js';
 import { LOGO_C, LOGO_REST } from './logo-paths.js';
 const { useState, useEffect, useRef } = React;
@@ -226,8 +226,9 @@ export const ACCOUNTS = [
 // when the server reports demo controls enabled. The server enforces both conditions.
 export function ApiDemoControls() {
   const { db, staff, refresh, toast } = useApp(); const [enabled, setEnabled] = useState(false); const [open, setOpen] = useState(false); const [busy, setBusy] = useState(false); const [confirm, setConfirm] = useState(false);
-  useEffect(() => { api.health().then(h => setEnabled(!!h.demoControls)).catch(() => setEnabled(false)); }, []);
-  if (!enabled || !staff || !staff.roles.includes('superadmin')) return null;
+  const [canLaunch, setCanLaunch] = useState(false); const [launch, setLaunch] = useState(false);
+  useEffect(() => { api.health().then(h => { setEnabled(!!h.demoControls); setCanLaunch(!!h.launchReset); }).catch(() => setEnabled(false)); }, []);
+  if ((!enabled && !canLaunch) || !staff || !staff.roles.includes('superadmin')) return null;
   const sc = db.scenario || {}; const clock = new Date(now()).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
   const go = async (fn, msg) => { setBusy(true); try { await fn(); await refresh(); toast(msg, 'info'); } catch (e) { toast(e.message, 'bad'); } setBusy(false); };
   return <div className="demo">
@@ -241,10 +242,33 @@ export function ApiDemoControls() {
         <label className="demo-row">Connection tests<select value={sc.testConn || 'success'} disabled={busy} onChange={e => go(() => api.demoScenario({ testConn: e.target.value }), 'Connection test outcome set to ' + e.target.value)}>{['success', 'failure', 'timeout'].map(x => <option key={x}>{x}</option>)}</select></label>
       </DemoSection>
       <button className="demo-btn" disabled={busy} onClick={() => setConfirm(true)}>Reset all demo data…</button>
+      {canLaunch && <DemoSection title="Go live" open><p className="xs muted">Removes all demo data and every staff account except yours. Cannot be undone.</p><button className="demo-btn" disabled={busy} onClick={() => setLaunch(true)}>Remove demo data and go live…</button></DemoSection>}
     </div>}
     <button className="demo-pill" aria-expanded={open} onClick={() => setOpen(!open)}><span className="demo-dot" />Demo controls <Sim>Demo environment</Sim></button>
+    {launch && <LaunchDialog onClose={() => setLaunch(false)} />}
     {confirm && <Confirm danger title="Reset all demo data?" body="Every order, case, payout, setting and account on this demo server returns to the original fixtures, including passwords. Everyone signed in sees the reset." confirmLabel="Reset demo data" onClose={() => setConfirm(false)} onConfirm={() => go(() => api.demoReset(), 'Demo data reset to the original fixtures')} />}
   </div>;
+}
+
+// The one-time launch reset: an empty marketplace with only the signed-in Super Admin.
+function LaunchDialog({ onClose }) {
+  const { staff, refresh, toast, nav } = useApp(); const [v, setV] = useState({ name: staff.name, password: '', confirm: '' }); const [err, setErr] = useState({}); const [busy, setBusy] = useState(false);
+  const s = k => e => setV({ ...v, [k]: e.target.value });
+  async function go() {
+    if (v.name.trim().length < 2) return setErr({ name: 'Enter the name to show on your admin account.' });
+    if (!v.password) return setErr({ password: 'Enter your password.' });
+    if (v.confirm !== 'LAUNCH') return setErr({ confirm: 'Type LAUNCH in capital letters.' });
+    setBusy(true); setErr({});
+    try { await api.launch({ name: v.name.trim(), password: v.password, confirm: v.confirm }); await refresh(); toast('Demo data removed. The marketplace is empty and only your account remains.', 'info'); onClose(); nav({ page: 'sa-overview' }); }
+    catch (e) { setBusy(false); setErr({ [e.field || 'form']: e.message }); }
+  }
+  return <Modal title="Remove demo data and go live" onClose={onClose} footer={<><Btn v="ghost" onClick={onClose}>Cancel</Btn><Btn v="danger" disabled={busy} onClick={go}>{busy ? 'Removing…' : 'Remove everything except my account'}</Btn></>}>
+    <Notice tone="bad" title="This cannot be undone">Every customer, store, listing, order, payment, payout, case, message and notification is deleted, and so is every staff account except yours ({staff.email}). Categories, roles, settings, FAQs and published policies are kept.</Notice>
+    <Field label="Name shown on your admin account" required error={err.name}><input value={v.name} onChange={s('name')} /></Field>
+    <Field label="Your password" required error={err.password}><input type="password" autoComplete="current-password" value={v.password} onChange={s('password')} /></Field>
+    <Field label="Type LAUNCH to confirm" required error={err.confirm}><input value={v.confirm} onChange={s('confirm')} autoComplete="off" /></Field>
+    {err.form && <p className="ferr" role="alert">{err.form}</p>}
+  </Modal>;
 }
 
 function DemoSection({ title, children, open }) { return <details className="demo-sec" open={open}><summary>{title}</summary><div className="demo-sec-b">{children}</div></details>; }

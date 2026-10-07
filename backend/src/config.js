@@ -14,6 +14,8 @@ export const config = {
   seedPassword: env.SEED_DEMO_PASSWORD || (production ? '' : 'demo-password-change-me'),
   simulateProviders: bool(env.SIMULATE_PROVIDERS, !production),
   allowDemoControls: bool(env.ALLOW_DEMO_CONTROLS, !production),
+  // One-time launch reset (POST /api/admin/launch). Off unless explicitly switched on.
+  allowLaunchReset: bool(env.ALLOW_LAUNCH_RESET, false),
   // Sign-in and registration attempts per IP address per 15 minutes.
   authRateLimit: Number(env.AUTH_RATE_LIMIT) || 30,
   // Transactional email. With RESEND_API_KEY set, email is sent through Resend (or through Brevo

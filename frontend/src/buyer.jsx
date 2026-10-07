@@ -96,8 +96,11 @@ export function Cart() {
 
 const OUTCOMES = [{ id: 'success', label: 'Success', tone: 'ok' }, { id: 'pending', label: 'Pending', tone: 'warn' }, { id: 'failure', label: 'Failure', tone: 'bad' }, { id: 'cancel', label: 'Cancelled' }];
 export function Checkout() {
-  const { db, me, route, nav, update, toast, perform, payMode } = useApp();
+  const { db, me, route, nav, update, toast, perform, payMode, demoEnv } = useApp();
   useEffect(() => { if (!apiEnabled) update(d => refreshOfferExpiry(d)); }, []);
+  // Outside the demo, only methods with a real provider behind them are offered.
+  const METHODS = [['Card', 'wallet'], ['Crypto', 'layers'], ['bKash', 'phone'], ['Nagad', 'phone']].filter(([m]) => !apiEnabled || demoEnv || (m === 'Crypto' && payMode.startsWith('nowpayments')));
+  useEffect(() => { if (METHODS.length && !METHODS.some(([m]) => m === method)) setMethod(METHODS[0][0]); });
   const lines = useMemo(() => {
     if (route.offerId) {
       const of = db.offers.find(o => o.id === route.offerId); if (!of) return [];
@@ -156,8 +159,9 @@ export function Checkout() {
         </li>; })}</ul>
       </Section>
       <Section title="2. Payment method">
-        <div className="pay-methods" role="radiogroup" aria-label="Payment method">{[['Card', 'wallet'], ['Crypto', 'layers'], ['bKash', 'phone'], ['Nagad', 'phone']].map(([m, ic]) =>
+        <div className="pay-methods" role="radiogroup" aria-label="Payment method">{METHODS.map(([m, ic]) =>
           <label key={m} className={'pay-m' + (method === m ? ' on' : '')}><input type="radio" name="pm" checked={method === m} onChange={() => setMethod(m)} /><Icon n={ic} s={18} /><b>{m}</b></label>)}</div>
+        {!METHODS.length && <Notice tone="warn" title="Payments are not available yet">No payment method is connected at the moment. Try again later or contact support.</Notice>}
         <div className="pay-detail">
           {method === 'Card' && <div className="form-grid"><Field label="Name on card"><input value={card.name} onChange={e => setCard({ ...card, name: e.target.value })} /></Field><Field label="Card number" hint="Demo number prefilled"><input inputMode="numeric" value={card.num} onChange={e => setCard({ ...card, num: e.target.value })} /></Field><Field label="Expiry"><input value={card.exp} onChange={e => setCard({ ...card, exp: e.target.value })} /></Field><Field label="CVC"><input value={card.cvc} onChange={e => setCard({ ...card, cvc: e.target.value })} /></Field></div>}
           {method === 'Crypto' && live && <div><p className="small">You pay on the NOWPayments page, where you choose the coin and network and get the exact amount and address. Your order is created when the network confirms the full payment, usually within a few minutes.</p>
@@ -177,7 +181,7 @@ export function Checkout() {
           <div className="sum-total"><dt>Total</dt><dd>{money(total)} USD</dd></div></dl>
         <label className="checkline"><input type="checkbox" checked={terms} onChange={e => setTerms(e.target.checked)} /><span>I accept the <a href="#" onClick={e => { e.preventDefault(); nav({ page: 'terms' }); }}>Terms</a> and the <a href="#" onClick={e => { e.preventDefault(); nav({ page: 'policies' }); }}>delivery, replacement and refund terms</a> ({TERMS_VERSION}).</span></label>
         {err && <p className="ferr" role="alert">{err}</p>}
-        <Btn v="primary" className="block lg" disabled={busy || blocked} onClick={pay}>{busy ? <><span className="spin" />{live ? 'Opening payment page…' : 'Processing payment…'}</> : live ? `Continue to pay ${money(total)}` : `Pay ${money(total)} (simulated)`}</Btn>
+        <Btn v="primary" className="block lg" disabled={busy || blocked || !METHODS.length} onClick={pay}>{busy ? <><span className="spin" />{live ? 'Opening payment page…' : 'Processing payment…'}</> : live ? `Continue to pay ${money(total)}` : `Pay ${money(total)} (simulated)`}</Btn>
         <p className="xs muted center">{live ? `This is a real payment${payMode.endsWith('sandbox') ? ' in the provider’s test environment' : ''}. ` : 'No real payment is taken. '}A browser redirect alone never marks an order paid.</p>
       </div></aside></div>
   </>;

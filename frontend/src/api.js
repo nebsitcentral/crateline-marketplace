@@ -63,6 +63,8 @@ export const api = {
   sendPayout: (id, version, code) => call(`/api/payouts/${id}/execute`, { method: 'POST', body: { version, code } }),
   confirmPayout: (id, code) => call(`/api/payouts/${id}/verify`, { method: 'POST', body: { code } }),
   payoutStatus: id => call(`/api/payouts/${id}/status`, { method: 'POST' }),
+  // One-time launch reset (Super Admin; only while the server has it switched on).
+  launch: body => call('/api/admin/launch', { method: 'POST', body }),
   fileUrl: id => call(`/api/files/${id}/url`),
   addPayoutMethod: body => call('/api/payout-methods', { method: 'POST', body }),
   // Demo controls: Super Admin only, and only while the server allows them (ALLOW_DEMO_CONTROLS).

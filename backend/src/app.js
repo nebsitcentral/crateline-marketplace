@@ -19,6 +19,7 @@ import { kycSessionStarted, kycProviderEvent } from '@crateline/domain/ops.js';
 import { catalogView, customerView, staffView } from './views.js';
 import { customer as CUSTOMER, staff as STAFF } from './actions.js';
 import { seedStore } from './seed.js';
+import { launchDocument } from './launch.js';
 import { filesEnabled, fileIdsIn, MAX_FILE_BYTES, BLOCKED_EXT, DOWNLOAD_TTL_S } from './files.js';
 import { can } from '@crateline/domain/fin.js';
 
@@ -72,7 +73,7 @@ export function createApp(store, { transport = null, storage = null, payments = 
     return rec;
   };
 
-  app.get('/health', wrap(async (req, res) => res.json({ ok: true, store: store.kind, simulateProviders: config.simulateProviders, demoControls: config.allowDemoControls, email: config.emailTransport, files: storage ? config.fileStorage : 'off', payments: payments ? (payments.sandbox ? 'nowpayments-sandbox' : 'nowpayments') : 'simulated', payouts: payments?.canPayOut && config.payouts === 'nowpayments' ? 'nowpayments' : 'simulated', kyc: kyc ? 'didit' : 'simulated', version: (process.env.RAILWAY_GIT_COMMIT_SHA || '').slice(0, 7) || 'local' })));
+  app.get('/health', wrap(async (req, res) => res.json({ ok: true, store: store.kind, simulateProviders: config.simulateProviders, demoControls: config.allowDemoControls, launchReset: config.allowLaunchReset, email: config.emailTransport, files: storage ? config.fileStorage : 'off', payments: payments ? (payments.sandbox ? 'nowpayments-sandbox' : 'nowpayments') : 'simulated', payouts: payments?.canPayOut && config.payouts === 'nowpayments' ? 'nowpayments' : 'simulated', kyc: kyc ? 'didit' : 'simulated', version: (process.env.RAILWAY_GIT_COMMIT_SHA || '').slice(0, 7) || 'local' })));
 
   app.get('/api/catalog', wrap(async (req, res) => { const { doc } = await store.read(); res.json(catalogView(doc)); }));
 
@@ -537,6 +538,21 @@ export function createApp(store, { transport = null, storage = null, payments = 
     res.json({ ok: true, version });
   }));
   app.post('/api/demo/reset', auth(), demoOnly, superOnly, wrap(async (req, res) => { await seedStore(store, { force: true }); res.json({ ok: true }); }));
+
+  // One-time launch reset: removes all demo data and every staff member except the Super Admin
+  // who runs it. Needs ALLOW_LAUNCH_RESET=true on the server, that admin's password and the word
+  // LAUNCH. Sessions of the kept admin stay valid; everyone else's accounts are gone.
+  app.post('/api/admin/launch', authLimiter, auth(), wrap(async (req, res) => {
+    if (!config.allowLaunchReset) return res.status(403).json({ error: 'The launch reset is switched off on this server.' });
+    const { doc } = await store.read(); const actor = req.auth.kind === 'staff' && actorFrom(doc, req.auth);
+    if (!actor || !actor.roles.includes('superadmin')) return res.status(403).json({ error: 'Super Admin only.' });
+    const acc = await store.findAccount(actor.email);
+    if (!acc || !(await bcrypt.compare(String(req.body?.password || ''), acc.hash))) throw Object.assign(new DomainError('Your password is incorrect.', 'validation'), { field: 'password' });
+    if (req.body?.confirm !== 'LAUNCH') throw Object.assign(new DomainError('Type LAUNCH to confirm. This removes all marketplace data.', 'validation'), { field: 'confirm' });
+    const name = typeof req.body?.name === 'string' && req.body.name.trim().length >= 2 ? req.body.name.trim().slice(0, 100) : null;
+    await store.replace(launchDocument(doc, actor.id, { name }), [{ email: acc.email, kind: 'staff', refId: actor.id, hash: acc.hash }]);
+    res.json({ ok: true });
+  }));
 
   app.use((req, res) => res.status(404).json({ error: 'Not found.' }));
   return app;

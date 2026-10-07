@@ -162,6 +162,17 @@ Verification Admin still approves the store. Stores that applied before Didit ar
 3. Push to `main`. The workflow in `.github/workflows/deploy-frontend.yml` runs the tests, builds
    and publishes to `https://yourname.github.io/<repo-name>/`.
 
+## Going live
+
+1. Sign in as the Super Admin who will own the marketplace. Set `ALLOW_LAUNCH_RESET=true` on the
+   Railway `backend` service.
+2. In the admin panel open **Demo controls → Go live → Remove demo data and go live**. It asks for
+   your name, your password and the word LAUNCH, then deletes all demo data and every staff
+   account except yours. Categories, roles, settings, FAQs and published policies stay.
+3. On Railway remove `ALLOW_LAUNCH_RESET` and set `SIMULATE_PROVIDERS=false` and
+   `ALLOW_DEMO_CONTROLS=false`. The "Demo environment" label and demo controls disappear, and
+   checkout offers only payment methods with a real provider (crypto).
+
 ## Before real customers use it
 
 The prototype must not take real money or identity data until these are in place: real payment and
