@@ -65,3 +65,22 @@ test('new ids never reuse an id that already exists (counter starts after the hi
   assert.equal(nid(d, 'SE'), 'SE-4'); assert.equal(nid(d, 'SE'), 'SE-5');
   assert.equal(nid(d, 'NEWPREFIX'), 'NEWPREFIX-1');
 });
+
+test('a requester cannot approve their own setting change, unless they are the only Super Admin; money always needs two people', async () => {
+  const { proposeSetting, S: settings } = await import('@crateline/domain/fin.js');
+  const d = fresh(); const sofia = S(d, 'SA-01');
+  proposeSetting(d, sofia, 'payoutMinC', 3000, 'Raise the minimum payout');
+  const apr = d.approvals.find(a => a.type === 'setting' && a.requesterId === 'SA-01' && a.status === 'Pending');
+  // Another Super Admin exists: blocked.
+  assert.throws(() => decideApproval(d, sofia, apr.id, 'approve', 'ok', apr.version), /You requested this/);
+  // Sofia is the only Super Admin: allowed, applied and recorded as decided by the requester.
+  d.staff['SA-02'].active = false;
+  decideApproval(d, sofia, apr.id, 'approve', 'No other Super Admin', apr.version);
+  assert.equal(apr.status, 'Approved'); assert.equal(settings(d).payoutMinC, 3000);
+  assert.match(apr.comments.at(-1).text, /decided by the requester: no other Super Admin exists/);
+  assert.ok(d.audit.some(a => a.action === 'Approval approved by its requester (only Super Admin)' && a.object === apr.id));
+  // A refund she requested still needs someone else, even as the only Super Admin.
+  const before = d.approvals.length; requestRefund(d, sofia, { orderId: 'ORD-1001', amountC: 500, reason: 'Goodwill' });
+  const ra = d.approvals.find(a => a.type === 'refund' && a.requesterId === 'SA-01' && a.status === 'Pending'); assert.equal(d.approvals.length, before + 1);
+  assert.throws(() => decideApproval(d, sofia, ra.id, 'approve', 'ok', ra.version), /You requested this/);
+});

@@ -69,6 +69,8 @@ npm run seed -w backend -- --force   # reset the API data to the fixtures
 * **Separate approval from execution.** Refunds and payouts need a requester and a different
   approver; Finance limits are in settings (`financeRefundLimitC`, `financePayoutLimitC`).
   Approval never moves money. Provider events are idempotent via `processedOps`.
+  One exception, never for money: the only active Super Admin may decide their own setting, role,
+  integration or policy request (`soleSuperDecision`), recorded as decided by the requester.
 * **Never rewrite history.** Order snapshots (`order.snap`, `commissionRate`, `termsVersion`) are
   frozen at purchase. Audit entries are append-only. Archive instead of delete for transactions.
 * **Server is the authority.** Anything the browser receives from the API must come from

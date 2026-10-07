@@ -230,11 +230,16 @@ export function requiredAuthority(d, type, amountC) {
   if (type === 'payout') return amountC <= S(d).financePayoutLimitC ? `Finance Admin (up to ${fmtMoney(S(d).financePayoutLimitC)}) or Super Admin` : 'Super Admin (above Finance limit)';
   return 'Super Admin, other than the requester';
 }
+// The only active Super Admin deciding a request they made themselves. With nobody else able to
+// approve, settings, roles, integrations and policies would be stuck, so this one case is allowed
+// (and recorded as such). It never applies to money: refunds and payouts always need two people.
+export const soleSuperDecision = (d, staff, apr) => apr.requesterId === staff?.id && !['refund', 'payout'].includes(apr.type) && isSuper(d, staff) && activeSupers(d).length === 1;
 export function approvalCheck(d, staff, apr) {
   if (!staff?.active) return 'Your staff account is inactive.';
   if (apr.status !== 'Pending') return `This request is ${apr.status.toLowerCase()} and cannot be decided.`;
   if (apr.expiresAt < now()) return 'This approval request expired. The requester must resubmit.';
-  if (apr.requesterId === staff.id) return 'You requested this. A different staff account must approve it, whichever role you switch to.';
+  const sole = soleSuperDecision(d, staff, apr);
+  if (apr.requesterId === staff.id && !sole) return 'You requested this. A different staff account must approve it, whichever role you switch to.';
   if (apr.type === 'refund' || apr.type === 'payout') {
     const k = apr.type + 's'; const lim = limitFor(d, staff, k);
     if (!lim) return `${roleOf(d, staff).name} cannot approve ${k}.`;
@@ -242,7 +247,7 @@ export function approvalCheck(d, staff, apr) {
     return null;
   }
   if (!can(d, staff, 'approvals.decide')) return `${roleOf(d, staff).name} cannot decide ${apr.type} approvals.`;
-  if (apr.type === 'role' && apr.beneficiaries?.includes(staff.id)) return 'This change raises your own authority. Another Super Admin must approve it.';
+  if (apr.type === 'role' && apr.beneficiaries?.includes(staff.id) && !sole) return 'This change raises your own authority. Another Super Admin must approve it.';
   return null;
 }
 export function decideApproval(d, staff, id, decision, reason, ver) {
@@ -251,11 +256,11 @@ export function decideApproval(d, staff, id, decision, reason, ver) {
   if (!reason?.trim()) fail('Enter a reason for the decision.', 'validation');
   const why = approvalCheck(d, staff, apr);
   if (why) { audit(d, staff, `Approval ${decision} blocked`, apr.id, { reason: why, outcome: 'Blocked' }); d.blocked.push({ at: now(), id: apr.id, staff: staff.id, why }); fail(why, 'denied'); }
-  const before = apr.status;
+  const before = apr.status; const sole = soleSuperDecision(d, staff, apr);
   apr.status = decision === 'approve' ? 'Approved' : decision === 'reject' ? 'Rejected' : 'Changes requested';
   apr.approverId = staff.id; apr.decidedAt = now(); apr.decisionReason = reason; apr.version++;
-  apr.comments.push({ by: staff.name, at: now(), text: `${apr.status}: ${reason}` });
-  audit(d, staff, 'Approval ' + apr.status.toLowerCase(), apr.id, { reason, before, after: apr.status, approval: apr.id });
+  apr.comments.push({ by: staff.name, at: now(), text: `${apr.status}: ${reason}${sole ? ' (decided by the requester: no other Super Admin exists)' : ''}` });
+  audit(d, staff, 'Approval ' + apr.status.toLowerCase() + (sole ? ' by its requester (only Super Admin)' : ''), apr.id, { reason, before, after: apr.status, approval: apr.id, sensitive: sole });
   APPLY[apr.type]?.(d, staff, apr);
   if (apr.requesterId && d.staff[apr.requesterId]) snotify(d, [apr.requesterId], 'Approval decision', `${apr.title}: ${apr.status} by ${staff.name}.`, { page: 'sa-approval', id: apr.id });
   return apr;
