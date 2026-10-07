@@ -90,7 +90,6 @@ export function PublicHeader() {
         <button className="iconbtn" aria-label={`Inbox, ${unreadMsgs} unread`} onClick={() => nav({ page: 'inbox' })}><Icon n="chat" />{unreadMsgs > 0 && <span className="count">{unreadMsgs}</span>}</button>
         <NotifMenu /><ProfileMenu />
       </> : <>
-        <button className="admin-entry only-d" onClick={() => nav({ page: 'staff-signin' })}>Staff</button>
         <Btn v="ghost" onClick={() => nav({ page: 'signin' })}>Sign in</Btn>
         <Btn v="primary" className="only-d" onClick={() => nav({ page: 'signup' })}>Register</Btn>
       </>}

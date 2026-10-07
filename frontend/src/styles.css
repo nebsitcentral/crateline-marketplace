@@ -608,7 +608,6 @@ section.card .table-wrap{border:0;border-top:1px solid var(--line);border-radius
 .staff-pick{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}
 .staff-pick button{display:flex;flex-direction:column;align-items:flex-start;gap:3px;text-align:left;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
 .staff-pick button:hover:not(:disabled){border-color:var(--accent)} .staff-pick button:disabled{opacity:.5}
-.admin-entry{font-size:.82rem;font-weight:650;color:var(--fg-2);padding:6px 10px;border-radius:8px} .admin-entry:hover{background:var(--surface-2)}
 
 /* ==========================================================================
    Design refresh. Overrides the component rules above with the new design
@@ -768,7 +767,6 @@ section.card .table-wrap{border-top:1px solid var(--line)}
 .searchbox .btn{border-radius:999px}
 .searchbox.big{border-radius:999px;box-shadow:none;border-color:transparent;background:var(--surface-2);padding:6px 6px 6px 20px}
 .footer{background:transparent;border-top:1px solid var(--line)}
-.admin-entry{font-weight:500;border-radius:999px;padding:6px 12px}
 .mega{border-radius:var(--r)} .mega-h{font-weight:600}
 
 /* Home: hero becomes a large white discovery panel */
