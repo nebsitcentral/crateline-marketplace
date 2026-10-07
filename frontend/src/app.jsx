@@ -6,6 +6,7 @@ import { addToCart, setFollow, startConversation } from '@crateline/domain/actio
 import { audit, tick, DomainError } from '@crateline/domain/fin.js';
 import { AppCtx, Icon, SkeletonGrid, ErrorState } from './ui.jsx';
 import { apiEnabled, api, toDb } from './api.js';
+import { toUrl, fromUrl } from './routes.js';
 import { PublicHeader, Footer, PanelLayout, DemoSwitcher, ApiDemoControls } from './shell.jsx';
 import { Home, Search, Product, StorePage, Help, Terms, Privacy, Policies, NotFound, StaffSignIn } from './public.jsx';
 import { SignIn, SignUp, Verify, Forgot, Reset, EmailConfirm } from './auth.jsx';
@@ -27,8 +28,12 @@ const ADMIN = { 'a-overview': AOverview, 'a-queue': AQueue, 'a-users': AUsers, '
   'a-orders': AOrders, 'a-order': AOrder, 'a-cases': ACases, 'a-case': ACase, 'a-payments': APayments, 'a-payment': APayment, 'a-recon': ARecon, 'a-refunds': ARefunds, 'a-refund': ARefund, 'a-payouts': APayouts, 'a-payout': APayout,
   'sa-approvals': AApprovals, 'sa-approval': AApproval, 'a-support': ASupport, 'a-ticket': ATicket, 'a-reports': AReports, 'a-activity': AActivity,
   'sa-overview': SAOverview, 'sa-staff': SAStaff, 'sa-staffer': SAStaffer, 'sa-settings': SASettings, 'sa-commissions': SACommissions, 'sa-integrations': SAIntegrations, 'sa-payout-settings': SAPayoutSettings, 'sa-order-policies': SAOrderPolicies, 'sa-security': SASecurity, 'sa-health': SAHealth, 'sa-bizreports': SABizReports, 'sa-policies': SAPolicies };
-const TITLES = { home: 'Crateline', search: 'Search', product: 'Product', store: 'Store', inbox: 'Inbox', cases: 'Resolution Center' };
+const TITLES = { home: 'Crateline', search: 'Search', product: 'Product', store: 'Store', inbox: 'Inbox', cases: 'Resolution Center', case: 'Case', help: 'Help Center', terms: 'Terms and Conditions', privacy: 'Privacy Policy', policies: 'Policies',
+  signin: 'Sign in', signup: 'Register', 'staff-signin': 'Staff sign-in', verify: 'Verify email', forgot: 'Forgot password', reset: 'Reset password', 'email-confirm': 'Confirm email', notfound: 'Page not found',
+  'u-overview': 'Overview', 'u-orders': 'Purchase orders', 'u-order': 'Order', 'pay-result': 'Payment', cart: 'Cart', checkout: 'Checkout', following: 'Followed sellers', support: 'Support', notifications: 'Notifications', account: 'Account settings',
+  's-onboarding': 'Become a seller', 's-overview': 'Seller overview', 's-products': 'Products', 's-product-edit': 'Edit product', 's-orders': 'Sales orders', 's-order': 'Sales order', 's-earnings': 'Earnings', 's-payouts': 'Payouts', 's-store': 'Store settings' };
 const LS_KEY = 'crateline-demo-state';
+const BASE = import.meta.env.BASE_URL || '/';
 
 function load() {
   try { const s = localStorage.getItem(LS_KEY); if (s) { const d = JSON.parse(s); if (d.schema === SCHEMA) return d; } } catch { }
@@ -42,7 +47,9 @@ function App() {
   const [userId, _setUserId] = useState(null); const userRef = useRef(null);
   const [staffId, _setStaffId] = useState(null); const staffRef = useRef(null);
   const [mode, _setMode] = useState('buying'); const modeRef = useRef('buying');
-  const [route, _setRoute] = useState({ page: 'home' }); const routeRef = useRef(route);
+  // The page shown comes from the address, so a reload or a shared link opens the same screen.
+  const [route, _setRoute] = useState(() => fromUrl(window.location, BASE)); const routeRef = useRef(route);
+  const staffIntent = useRef(null); // the management page a signed-out visitor asked for
   const [toasts, setToasts] = useState([]); const [preview, setPreview] = useState(null);
   // API mode: 'loading' until the first response, then 'ready'; an error message if it failed.
   const [apiStatus, setApiStatus] = useState(apiEnabled ? 'loading' : 'ready');
@@ -51,7 +58,13 @@ function App() {
   const setUser = id => { userRef.current = id; _setUserId(id); };
   const setStaff = id => { staffRef.current = id; _setStaffId(id); evidenceOpen.current = new Set(); };
   const setMode = m => { modeRef.current = m; _setMode(m); };
-  const setRoute = r => { routeRef.current = r; _setRoute(r); };
+  // Shows a route and puts its address in the browser (a new history entry unless `replace`).
+  const setRoute = (r, replace) => {
+    routeRef.current = r; _setRoute(r);
+    const url = toUrl(r, BASE); if (url == null) return;
+    const cur = window.location.pathname + window.location.search;
+    if (url !== cur) window.history[replace ? 'replaceState' : 'pushState'](null, '', url + window.location.hash);
+  };
   const setIntent = i => { intentRef.current = i; setPendingIntent(i); };
 
   const toast = useCallback((text, tone = 'ok') => { const id = Math.random(); setToasts(t => [...t.slice(-2), { id, text, tone }]); setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 5200); }, []);
@@ -74,16 +87,29 @@ function App() {
   const update = useCallback(fn => run(fn).value, []);
   const act = useCallback((fn, msg) => { const r = run(fn); if (r.ok && msg) toast(msg); return r; }, []);
 
-  const nav = useCallback((r, replace) => {
+  // The route a visitor may actually see for the one they asked for: management pages need a
+  // staff sign-in and customer pages a customer sign-in (the page asked for is remembered and
+  // opened after signing in); selling pages need a store.
+  const admit = r => {
     const db = dbRef.current; const p = r.page;
-    if (ADMIN[p]) { if (!staffRef.current) { toast('Management pages need a staff account. Use the demo toolbar.', 'warn'); return; } setRoute(r); if (!replace) window.scrollTo(0, 0); return; }
+    if (ADMIN[p]) { if (staffRef.current) return r; staffIntent.current = r; return { page: 'staff-signin' }; }
     const uid = userRef.current; const u = uid && db.users[uid];
     const priv = BUYER[p] || SHARED[p] || SELLER[p];
-    if (priv && !u) { setIntent({ type: 'nav', route: r }); setRoute({ page: 'signin' }); window.scrollTo(0, 0); return; }
-    if (SELLER[p]) { if (!u.storeId) { r = { page: 's-onboarding' }; } else if (modeRef.current !== 'selling') setMode('selling'); }
+    if (priv && !u) { setIntent({ type: 'nav', route: r }); return { page: 'signin' }; }
+    if (SELLER[p]) { if (!u.storeId) return { page: 's-onboarding' }; if (modeRef.current !== 'selling') setMode('selling'); }
     if (BUYER[p] && modeRef.current !== 'buying') setMode('buying');
-    if (!PUBLIC[p] && !AUTH[p] && !priv) r = { page: 'notfound' };
-    setRoute(r); if (!replace) window.scrollTo(0, 0);
+    if (!PUBLIC[p] && !AUTH[p] && !priv) return { page: 'notfound' };
+    return r;
+  };
+  const nav = useCallback((r, replace) => { setRoute(admit(r), replace); if (!replace) window.scrollTo(0, 0); }, []);
+  // First load: once it is known who is signed in, check the page in the address against that.
+  // Done before the first page is drawn, so a page is never drawn for someone who cannot open it.
+  const admitted = useRef(false);
+  const admitFirst = () => { if (admitted.current) return; admitted.current = true; setRoute(admit(routeRef.current), true); };
+  // Back and forward buttons: show the page for the address the browser moved to.
+  useEffect(() => {
+    const onPop = () => { const r = admit(fromUrl(window.location, BASE)); routeRef.current = r; _setRoute(r); };
+    window.addEventListener('popstate', onPop); return () => window.removeEventListener('popstate', onPop);
   }, []);
 
   async function runIntent(intent, uid) {
@@ -122,9 +148,9 @@ function App() {
   const refresh = useCallback(async () => {
     try {
       if (api.hasToken()) {
-        try { await loadState(); setApiStatus('ready'); return; } catch (e) { if (e.status !== 401 && e.status !== 403) throw e; api.logout(); setUser(null); setStaff(null); toast('Your session has ended. Sign in again.', 'warn'); }
+        try { await loadState(); admitFirst(); setApiStatus('ready'); return; } catch (e) { if (e.status !== 401 && e.status !== 403) throw e; api.logout(); setUser(null); setStaff(null); toast('Your session has ended. Sign in again.', 'warn'); }
       }
-      commit(toDb('guest', await api.catalog())); setApiStatus('ready');
+      commit(toDb('guest', await api.catalog())); admitFirst(); setApiStatus('ready');
     } catch (e) { setApiStatus(e.message || 'The server could not be reached.'); }
   }, []);
   useEffect(() => { if (apiEnabled) refresh(); }, []);
@@ -153,6 +179,9 @@ function App() {
     setRoute({ page: hit[1], token: q.get(hit[0]) });
     q.delete(hit[0]); window.history.replaceState(null, '', window.location.pathname + (q.toString() ? '?' + q : '') + window.location.hash);
   }, []);
+
+  // Demo mode has no session to wait for: check the first page straight away.
+  useEffect(() => { if (!apiEnabled) admitFirst(); }, []);
 
   // Returning from the payment provider (?paid=<purchase>): show that payment's status once the
   // session has loaded. The address itself proves nothing; the status comes from the server.
@@ -216,7 +245,9 @@ function App() {
     let r; try { r = await loadState(); } catch (e) { api.logout(); throw e; }
     if (r.kind === 'user') { signIn(r.view.me.id); return; }
     const d = dbRef.current; const s = d.staff[r.view.me.id]; setIntent(null);
-    setRoute({ page: homeFor(d, s) }); window.scrollTo(0, 0); toast(`Signed in as ${s.name}, ${d.roles[s.activeRole].name}`, 'info');
+    // Open the management page that was asked for before signing in, if this role may see it.
+    const asked = staffIntent.current; staffIntent.current = null;
+    setRoute(asked && ADMIN[asked.page] && canRoute(d, s, asked.page) ? asked : { page: homeFor(d, s) }); window.scrollTo(0, 0); toast(`Signed in as ${s.name}, ${d.roles[s.activeRole].name}`, 'info');
   };
 
   const loadMore = useCallback(async resource => {
@@ -269,7 +300,7 @@ function App() {
     const C = PUBLIC[p] || AUTH[p] || NotFound;
     body = <div className="site"><a className="skip" href="#main">Skip to content</a><PublicHeader /><main id="main" className={AUTH[p] ? 'auth-main' : ''}><C key={p + (route.id || '')} /></main><Footer /></div>;
   } else {
-    const C = BUYER[p] || SHARED[p] || SELLER[p];
+    const C = BUYER[p] || SHARED[p] || SELLER[p] || NotFound;
     body = <PanelLayout><C key={p + (p === 'inbox' ? '' : route.id || '') + mode} /></PanelLayout>;
   }
   return <AppCtx.Provider value={ctx}>

@@ -26,6 +26,9 @@ frontend/src/          React UI (Vite). app.jsx is the router and in-browser sto
   admin-ui.jsx         Management shell, route permission map (ROUTES), lists, dialogs, previews
   admin-ops.jsx admin-fin.jsx super.jsx                 Admin and Super Admin screens
   api.js               Client for the backend (used when VITE_API_URL is set)
+  routes.js            Page addresses: toUrl(route) and fromUrl(location). app.jsx keeps the browser
+                       address in step with the route; the build copies index.html to 404.html so
+                       GitHub Pages serves the app for every address
 backend/src/           Express API
   app.js               Routes: /health, /api/catalog, /api/auth/*, /api/state, /api/actions/:name
   actions.js           Whitelist of named actions for customers and staff
