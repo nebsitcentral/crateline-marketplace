@@ -5,7 +5,7 @@ import { now, DAY } from '@crateline/domain/clock.js';
 import { fmtMoney, can, roleOf, isSuper, assignment, setAssignee, key, audit, nid, storeBuckets, staffWith, setPriority, addNote, switchRole, markStaffNotesRead, logEvidenceView, logExport } from '@crateline/domain/fin.js';
 import { fmtDT, fmtDate, rel, tzName, STATUS_LABEL, STATUS_TONE, openCase } from '@crateline/domain/logic.js';
 import { Icon, Btn, Badge, Avatar, Modal, Field, Notice, Empty, ErrorState, Table, KV, Section, Sim, Timeline, useApp } from './ui.jsx';
-import { Logo, TopNav } from './shell.jsx';
+import { Logo } from './shell.jsx';
 import { TwoFactorPanel } from './shared.jsx';
 import { apiEnabled, api } from './api.js';
 const { useState, useEffect, useRef, useMemo } = React;
@@ -102,8 +102,6 @@ export function AdminShell({ children }) {
       <button className="iconbtn only-m" aria-label="Open navigation" onClick={() => setDrawer(true)}><Icon n="menu" /></button>
       <Logo onClick={() => nav({ page: homeFor(db, staff) })} />
       <span className="demo-env" title="Every provider, identity, email and money action here is simulated">Demo environment</span>
-      <TopNav label="Management navigation" active={active} onGo={id => nav({ page: id })} primary={4} wide={2} items={(sup ? [...SUPER_NAV.map(id => [id, 'Super Admin']), ...adminIds.filter(id => id !== 'sa-approvals').map(id => [id, 'Operations'])] : ADMIN_GROUPS.flatMap(g => adminIds.filter(id => ROUTES[id][2] === g).map(id => [id, g])))
-        .filter(([id]) => can(db, staff, ROUTES[id][1])).map(([id, group]) => ({ id, group, label: ROUTES[id][0], icon: NAV_ICON[id], count: counts[id] }))} />
       <div className="tb-search only-d"><GlobalSearch /></div>
       <nav className="ph-actions" aria-label="Staff">
         <button className="iconbtn" aria-label={`Notifications, ${unread} unread`} onClick={() => setNotes(true)}><Icon n="bell" />{unread > 0 && <span className="count">{unread}</span>}</button>
@@ -114,6 +112,7 @@ export function AdminShell({ children }) {
       </nav>
     </div></header>
     <div className="panel-body">
+      <aside className="sidebar only-d">{side}</aside>
       <main className="panel-main" id="main"><nav className="crumbs" aria-label="Breadcrumb">{crumbs.map((c, i) => <span key={i} className="row-gap">{i > 0 && <Icon n="right" s={12} />}{i === crumbs.length - 1 ? <b>{c}</b> : c}</span>)}</nav>{children}</main>
     </div>
     {drawer && <div className="drawer-bg" onClick={() => setDrawer(false)}><aside className="drawer" onClick={e => e.stopPropagation()}><div className="drawer-h"><Logo onClick={() => nav({ page: homeFor(db, staff) })} /><button className="iconbtn" aria-label="Close navigation" onClick={() => setDrawer(false)}><Icon n="x" /></button></div><GlobalSearch />{side}</aside></div>}

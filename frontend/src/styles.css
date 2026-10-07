@@ -922,3 +922,13 @@ section.card>.notice{margin:0 26px 16px;padding:13px 16px} section.card>.notice:
 .tb-row,.panel-main{max-width:1760px}
 .tb-row{padding-inline:clamp(12px,3vw,48px)}
 .panel-main{padding-inline:clamp(16px,3vw,48px)}
+
+/* Management panels: navigation in a left sidebar that stays in view; the page scrolls beside it.
+   Below 900px the sidebar is hidden and the same menu opens from the top bar button. */
+.panel.admin .panel-body{display:grid;grid-template-columns:264px minmax(0,1fr);align-items:start;max-width:1760px;margin:0 auto;width:100%}
+.panel.admin .sidebar{display:block;position:sticky;top:68px;height:calc(100vh - 68px);overflow-y:auto;background:transparent;border-right:1px solid var(--line);padding:14px 12px 96px clamp(12px,3vw,48px)}
+.panel.admin .sidebar .side-nav{position:static}
+.panel.admin .panel-main{margin:0;max-width:none;padding-top:16px}
+.panel.admin .tb-search{max-width:420px}
+@media(max-width:1179px){.panel.admin .tb-search{display:flex}}
+@media(max-width:900px){.panel.admin .panel-body{display:block}}
