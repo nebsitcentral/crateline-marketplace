@@ -422,6 +422,21 @@ export function retryTask(d, s, id) {
 
 // ---------- Super Admin: staff, integrations, payout methods, security, policies
 const staffOf = (d, sid) => d.staff[sid] || fail('Staff member not found.', 'not_found');
+// Adds a staff member with a real sign-in. The API creates their account and emails a link for
+// choosing a password; until they do, nobody can sign in as them.
+export function addStaff(d, s, { name, email, role, reason }) {
+  need(d, s, 'staff.manage', 'add staff');
+  const nm = String(name || '').trim().slice(0, 100); const em = String(email || '').trim().toLowerCase();
+  if (nm.length < 2) fail('Enter their full name.', 'validation');
+  if (!/^\S+@\S+\.\S+$/.test(em) || em.length > 200) fail('Enter a valid email address.', 'validation');
+  if (!d.roles[role]) fail('Choose a role.', 'validation');
+  if (!reason?.trim()) fail('Enter a reason.', 'validation');
+  if (Object.values(d.staff).some(x => x.email.toLowerCase() === em)) fail('A staff member already uses this email.', 'validation');
+  let n = Object.keys(d.staff).length + 1; const sid = () => 'ST-' + String(n).padStart(2, '0'); while (d.staff[sid()]) n++;
+  d.staff[sid()] = { id: sid(), name: nm, email: em, roles: [role], activeRole: role, team: d.roles[role].name.replace(' Admin', ''), active: true, twoFA: false, lastSignIn: null, sessions: [], invitedBy: s.name, invitedAt: now() };
+  audit(d, me(d, s), 'Staff member added', sid(), { reason, after: `${d.roles[role].name} · ${em}`, sensitive: true });
+  return sid();
+}
 export function inviteStaff(d, s, email, role) {
   need(d, s, 'staff.manage', 'invite staff');
   if (!/^\S+@\S+\.\S+$/.test(email || '')) fail('Enter a valid email address.', 'validation');

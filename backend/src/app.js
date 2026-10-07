@@ -15,7 +15,7 @@ import { currentTerms, paymentProviderEvent } from '@crateline/domain/logic.js';
 import { STATUS as PAY_STATUS, PAYOUT_STATUS } from './payments.js';
 import { executePayout, payoutNotSent, payoutSent, payoutProviderEvent, need, PAYOUT_NETS } from '@crateline/domain/fin.js';
 import { realPayout } from './actions.js';
-import { kycSessionStarted, kycProviderEvent } from '@crateline/domain/ops.js';
+import { kycSessionStarted, kycProviderEvent, addStaff } from '@crateline/domain/ops.js';
 import { catalogView, customerView, staffView } from './views.js';
 import { customer as CUSTOMER, staff as STAFF } from './actions.js';
 import { seedStore } from './seed.js';
@@ -35,11 +35,11 @@ export function createApp(store, { transport = null, storage = null, payments = 
   let sending = null;
   const kick = () => { if (transport && !sending) sending = processOutbox(store, transport).catch(e => console.error('email send failed', e)).finally(() => { sending = null; }); };
   // Queues an email with a fresh single-use token, inside a transaction.
-  const queueTokenEmail = async (tx, { kind, template, to, name, accountKind, refId, newEmail = null, hours }) => {
+  const queueTokenEmail = async (tx, { kind, template, to, name, accountKind, refId, newEmail = null, hours, data = {} }) => {
     const token = newToken();
     // `to` is the account's current address; for an email change the link goes to newEmail.
     await tx.saveToken({ hash: hashToken(token), kind, email: to, accountKind, refId, newEmail, expiresAt: Date.now() + hours * HOUR_MS });
-    await tx.queueEmail(compose(template, newEmail || to, { name, token }));
+    await tx.queueEmail(compose(template, newEmail || to, { ...data, name, token }));
   };
   const app = express();
   app.set('trust proxy', 1);
@@ -204,6 +204,44 @@ export function createApp(store, { transport = null, storage = null, payments = 
     });
     kick();
     res.json({ ok: true, token: sign(req.auth.kind, req.auth.id, tv) });
+  }));
+
+  // Adding a staff member: a Super Admin (confirming with their own password) creates the record
+  // and a sign-in that nobody knows the password of; the new member gets an emailed link, valid
+  // 72 hours, to choose their password. Needs working email.
+  const inviteLink = (tx, d, t, by) => queueTokenEmail(tx, { kind: 'reset', template: 'staffInvite', to: t.email, name: t.name.split(' ')[0], accountKind: 'staff', refId: t.id, hours: 72, data: { by, role: d.roles[t.activeRole].name } });
+  const staffManager = async (req) => {
+    const { doc } = await store.read(); const actor = req.auth.kind === 'staff' && actorFrom(doc, req.auth);
+    if (!actor) throw new DomainError('Staff only.', 'denied');
+    need(doc, actor, 'staff.manage', 'manage staff');
+    const mine = await store.findAccount(actor.email);
+    if (!mine || !(await bcrypt.compare(String(req.body?.password || ''), mine.hash))) throw Object.assign(new DomainError('Your password is incorrect.', 'validation'), { field: 'password' });
+    return doc;
+  };
+  app.post('/api/staff', authLimiter, auth(), wrap(async (req, res) => {
+    if (!emailEnabled()) throw new DomainError('Email is not set up on this server, so the new staff member could not be sent a link to choose a password.', 'rejected');
+    await staffManager(req);
+    const { name, email, role, reason } = req.body || {}; const to = String(email || '').trim().toLowerCase();
+    if (to && await store.findAccount(to)) throw Object.assign(new DomainError('An account already uses this email. Staff need an address that is not a customer account.', 'validation'), { field: 'email' });
+    // A random password nobody is told: the account cannot be used until the link sets a real one.
+    const hash = await bcrypt.hash(crypto.randomBytes(32).toString('base64url'), 10);
+    const { value: id } = await store.transact(async (d, tx) => {
+      const a = actorFrom(d, req.auth); const sid = addStaff(d, a, { name, email: to, role, reason });
+      await tx.createAccount({ email: to, kind: 'staff', refId: sid, hash });
+      await inviteLink(tx, d, d.staff[sid], a.name);
+      return sid;
+    });
+    kick(); res.status(201).json({ ok: true, staffId: id });
+  }));
+  // Sends the set-your-password link again (for a member who has not signed in yet).
+  app.post('/api/staff/:id/invite', authLimiter, auth(), wrap(async (req, res) => {
+    if (!emailEnabled()) throw new DomainError('Email is not set up on this server.', 'rejected');
+    const doc = await staffManager(req); const t = doc.staff[req.params.id];
+    if (!t) throw new DomainError('Staff member not found.', 'not_found');
+    if (!t.active) throw new DomainError('This staff account is inactive.', 'rejected');
+    if (t.lastSignIn) throw new DomainError('This staff member has already signed in. They can use "Forgot password?" on the staff sign-in page.', 'rejected');
+    await store.transact(async (d, tx) => { const a = actorFrom(d, req.auth); await inviteLink(tx, d, d.staff[t.id], a.name); audit(d, a, 'Staff set-up link sent again', t.id); });
+    kick(); res.json({ ok: true });
   }));
 
   // A staff member's sign-in email is changed by a Super Admin (their own included), who confirms

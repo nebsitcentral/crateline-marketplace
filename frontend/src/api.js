@@ -65,6 +65,9 @@ export const api = {
   payoutStatus: id => call(`/api/payouts/${id}/status`, { method: 'POST' }),
   // One-time launch reset (Super Admin; only while the server has it switched on).
   launch: body => call('/api/admin/launch', { method: 'POST', body }),
+  // Staff (Super Admin, confirmed with their own password): add a member, or send the set-up link again.
+  addStaff: body => call('/api/staff', { method: 'POST', body }),
+  resendStaffInvite: (id, password) => call(`/api/staff/${id}/invite`, { method: 'POST', body: { password } }),
   fileUrl: id => call(`/api/files/${id}/url`),
   addPayoutMethod: body => call('/api/payout-methods', { method: 'POST', body }),
   // Demo controls: Super Admin only, and only while the server allows them (ALLOW_DEMO_CONTROLS).

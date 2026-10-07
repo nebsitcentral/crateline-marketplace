@@ -425,3 +425,32 @@ test('a Super Admin changes a staff sign-in email with their own password; other
   const fresh = await login('new.dana@example.org', true); assert.equal((await req('/api/state', { token: fresh })).body.view.me.email, 'new.dana@example.org');
   assert.ok((await req('/api/state', { token: sa })).body.view.audit.some(a => a.action === 'Staff email changed' && a.object === id));
 });
+
+test('a Super Admin adds a staff member, who sets a password from the emailed link and signs in', async () => {
+  const { memoryTransport, processOutbox } = await import('../src/email.js'); const { config } = await import('../src/config.js');
+  const was = config.emailTransport; const sa = await login('kwame.sa-02@staff.example.com', true); const fin = await login('priya.fin-02@staff.example.com', true);
+  const add = (token, body) => req('/api/staff', { method: 'POST', token, body }); const body = { name: 'Tara Finch', email: 'Tara@Corp.example.org', role: 'finance', reason: 'New finance hire', password: 'test-pass-123' };
+  config.emailTransport = 'off'; assert.equal((await add(sa, body)).status, 400); // no way to send the link
+  config.emailTransport = 'log';
+  try {
+    assert.equal((await add(fin, body)).status, 403);
+    assert.equal((await add(sa, { ...body, password: 'wrong' })).status, 422);
+    assert.equal((await add(sa, { ...body, email: 'mira@example.com' })).status, 422); // a customer's address
+    assert.equal((await add(sa, { ...body, role: 'nope' })).status, 422);
+    const r = await add(sa, body); assert.equal(r.status, 201, JSON.stringify(r.body));
+    assert.equal((await add(sa, body)).status, 422); // already added
+    const rec = (await req('/api/state', { token: sa })).body.view.staff[r.body.staffId];
+    assert.equal(rec.name, 'Tara Finch'); assert.equal(rec.email, 'tara@corp.example.org'); assert.deepEqual(rec.roles, ['finance']); assert.equal(rec.lastSignIn, null);
+    // Nobody can sign in as them yet.
+    assert.equal((await req('/api/auth/staff/login', { method: 'POST', body: { email: 'tara@corp.example.org', password: 'test-pass-123' } })).status, 401);
+    // The emailed link sets the password; then the sign-in works with the new role.
+    const t = memoryTransport(); for (let i = 0; i < 20 && (await processOutbox(store, t)).sent; i++); const mail = t.sent.find(m => m.template === 'staffInvite' && m.to === 'tara@corp.example.org');
+    assert.match(mail.text, /added you to the Crateline admin panel as Finance Admin/);
+    const token = decodeURIComponent(mail.text.match(/[?]reset=([^\s&]+)/)[1]);
+    assert.equal((await req('/api/auth/password/reset', { method: 'POST', body: { token, password: 'her-own-pass-9' } })).status, 200);
+    const me = await req('/api/auth/staff/login', { method: 'POST', body: { email: 'tara@corp.example.org', password: 'her-own-pass-9' } }); assert.equal(me.status, 200);
+    assert.ok((await req('/api/state', { token: me.body.token })).body.view.payouts);
+    // Once they have signed in, the set-up link is not sent again.
+    assert.equal((await req(`/api/staff/${r.body.staffId}/invite`, { method: 'POST', token: sa, body: { password: 'test-pass-123' } })).status, 400);
+  } finally { config.emailTransport = was; }
+});
