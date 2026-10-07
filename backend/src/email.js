@@ -111,9 +111,12 @@ export async function processOutbox(store, transport, { limit = 20, now = Date.n
   const batch = await store.claimEmails(limit, now);
   let sent = 0, failed = 0;
   for (const m of batch) {
-    try { const r = await transport.send(m); await store.markEmailSent(m.id, r.providerId, Date.now()); sent++; }
+    // One log line per attempt (recipient masked), so delivery problems can be read from the server log.
+    const who = String(m.to).replace(/^(.).*(@.*)$/, '$1***$2');
+    try { const r = await transport.send(m); await store.markEmailSent(m.id, r.providerId, Date.now()); sent++; if (transport.name !== 'log' && transport.name !== 'memory') console.log(`email sent: ${m.template} to ${who} (${transport.name} ${r.providerId || 'no id'})`); }
     catch (e) {
       const attempts = m.attempts + 1; const giveUp = e.permanent || attempts > BACKOFF_MS.length;
+      console.error(`email not sent: ${m.template} to ${who}, attempt ${attempts}${giveUp ? ', giving up' : ', will retry'}: ${e.message}`);
       await store.markEmailFailed(m.id, attempts, giveUp ? null : now + BACKOFF_MS[attempts - 1], String(e.message).slice(0, 500));
       failed++;
     }
