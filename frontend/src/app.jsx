@@ -140,7 +140,9 @@ function App() {
   const [payoutMode, setPayoutMode] = useState('simulated');
   // True while the server still simulates providers or allows demo controls (always in demo mode).
   const [demoEnv, setDemoEnv] = useState(true);
-  useEffect(() => { if (apiEnabled) api.health().then(h => { setEmailMode(h.email || 'off'); setFileMode(h.files || 'off'); setPayMode(h.payments || 'simulated'); setKycMode(h.kyc || 'simulated'); setPayoutMode(h.payouts || 'simulated'); setDemoEnv(!!(h.simulateProviders || h.demoControls)); }).catch(() => setEmailMode('off')); }, []);
+  // True while the server has the one-time launch reset switched on.
+  const [launchReady, setLaunchReady] = useState(false);
+  useEffect(() => { if (apiEnabled) api.health().then(h => { setEmailMode(h.email || 'off'); setFileMode(h.files || 'off'); setPayMode(h.payments || 'simulated'); setKycMode(h.kyc || 'simulated'); setPayoutMode(h.payouts || 'simulated'); setDemoEnv(!!(h.simulateProviders || h.demoControls)); setLaunchReady(!!h.launchReset); }).catch(() => setEmailMode('off')); }, []);
   // Links from emails arrive as ?verify=, ?reset= or ?email=. Open the matching page and remove
   // the token from the address bar so it is not kept in history or shared by accident.
   useEffect(() => {
@@ -255,7 +257,7 @@ function App() {
 
   if (import.meta.env.DEV) window.__crateline = { db: () => dbRef.current }; // dev-only inspection hook
   const db = dbRef.current; const me = userId ? db.users[userId] : null; const staff = staffId ? db.staff[staffId] : null;
-  const ctx = { db, me, staff, mode, route, nav, update, act, toast, refresh, apiSignIn, perform, withInline, more, loadMore, emailMode, fileMode, payMode, kycMode, payoutMode, demoEnv, requireAuth, signIn, signOut, switchMode, setAccount, resetDemo, advance, setScenario, pendingIntent, listState, evidenceOpen, openPreview: setPreview };
+  const ctx = { db, me, staff, mode, route, nav, update, act, toast, refresh, apiSignIn, perform, withInline, more, loadMore, emailMode, fileMode, payMode, kycMode, payoutMode, demoEnv, launchReady, requireAuth, signIn, signOut, switchMode, setAccount, resetDemo, advance, setScenario, pendingIntent, listState, evidenceOpen, openPreview: setPreview };
   const p = route.page;
   let body;
   if (apiStatus !== 'ready') {

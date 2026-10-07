@@ -5,7 +5,7 @@ import { now, DAY } from '@crateline/domain/clock.js';
 import { fmtMoney, can, roleOf, isSuper, assignment, setAssignee, key, audit, nid, storeBuckets, staffWith, setPriority, addNote, switchRole, markStaffNotesRead, logEvidenceView, logExport } from '@crateline/domain/fin.js';
 import { fmtDT, fmtDate, rel, tzName, STATUS_LABEL, STATUS_TONE, openCase } from '@crateline/domain/logic.js';
 import { Icon, Btn, Badge, Avatar, Modal, Field, Notice, Empty, ErrorState, Table, KV, Section, Sim, Timeline, useApp } from './ui.jsx';
-import { Logo } from './shell.jsx';
+import { Logo, LaunchDialog } from './shell.jsx';
 import { TwoFactorPanel } from './shared.jsx';
 import { apiEnabled, api } from './api.js';
 const { useState, useEffect, useRef, useMemo } = React;
@@ -76,7 +76,7 @@ function NotesDrawer({ onClose }) {
 }
 
 export function AdminShell({ children }) {
-  const { db, staff, route, nav, update, toast, openPreview, perform, signOut, demoEnv } = useApp(); const [drawer, setDrawer] = useState(false); const [notes, setNotes] = useState(false); const [pm, setPm] = useState(false); const [security, setSecurity] = useState(false);
+  const { db, staff, route, nav, update, toast, openPreview, perform, signOut, demoEnv, launchReady } = useApp(); const [launch, setLaunch] = useState(false); const [drawer, setDrawer] = useState(false); const [notes, setNotes] = useState(false); const [pm, setPm] = useState(false); const [security, setSecurity] = useState(false);
   const role = roleOf(db, staff); const sup = isSuper(db, staff);
   const cur = ROUTES[route.page]; const active = cur?.[3] || route.page;
   const unread = db.staffNotes.filter(n => n.staffId === staff.id && !n.read).length;
@@ -113,9 +113,12 @@ export function AdminShell({ children }) {
     </div></header>
     <div className="panel-body">
       <aside className="sidebar only-d">{side}</aside>
-      <main className="panel-main" id="main"><nav className="crumbs" aria-label="Breadcrumb">{crumbs.map((c, i) => <span key={i} className="row-gap">{i > 0 && <Icon n="right" s={12} />}{i === crumbs.length - 1 ? <b>{c}</b> : c}</span>)}</nav>{children}</main>
+      <main className="panel-main" id="main"><nav className="crumbs" aria-label="Breadcrumb">{crumbs.map((c, i) => <span key={i} className="row-gap">{i > 0 && <Icon n="right" s={12} />}{i === crumbs.length - 1 ? <b>{c}</b> : c}</span>)}</nav>
+        {launchReady && sup && <Notice tone="accent" title="Ready to go live" action={<Btn v="primary" size="sm" onClick={() => setLaunch(true)}>Remove demo data and go live…</Btn>}>This removes all demo data and every staff account except yours. It asks for your password first and cannot be undone.</Notice>}
+        {children}</main>
     </div>
     {drawer && <div className="drawer-bg" onClick={() => setDrawer(false)}><aside className="drawer" onClick={e => e.stopPropagation()}><div className="drawer-h"><Logo onClick={() => nav({ page: homeFor(db, staff) })} /><button className="iconbtn" aria-label="Close navigation" onClick={() => setDrawer(false)}><Icon n="x" /></button></div><GlobalSearch />{side}</aside></div>}
+    {launch && <LaunchDialog onClose={() => setLaunch(false)} />}
     {notes && <NotesDrawer onClose={() => setNotes(false)} />}
     {security && <StaffSecurity onClose={() => setSecurity(false)} />}
   </div>;

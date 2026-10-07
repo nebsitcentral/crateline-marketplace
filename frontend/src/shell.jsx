@@ -241,7 +241,7 @@ export function ApiDemoControls() {
         <label className="demo-row">Refunds, payouts, reconciliation<select value={sc.provider || 'success'} disabled={busy} onChange={e => go(() => api.demoScenario({ provider: e.target.value }), 'Provider outcome set to ' + e.target.value)}>{['success', 'failure', 'unknown'].map(x => <option key={x}>{x}</option>)}</select></label>
         <label className="demo-row">Connection tests<select value={sc.testConn || 'success'} disabled={busy} onChange={e => go(() => api.demoScenario({ testConn: e.target.value }), 'Connection test outcome set to ' + e.target.value)}>{['success', 'failure', 'timeout'].map(x => <option key={x}>{x}</option>)}</select></label>
       </DemoSection>
-      <button className="demo-btn" disabled={busy} onClick={() => setConfirm(true)}>Reset all demo data…</button>
+      {!canLaunch && <button className="demo-btn" disabled={busy} onClick={() => setConfirm(true)}>Reset all demo data…</button>}
       {canLaunch && <DemoSection title="Go live" open><p className="xs muted">Removes all demo data and every staff account except yours. Cannot be undone.</p><button className="demo-btn" disabled={busy} onClick={() => setLaunch(true)}>Remove demo data and go live…</button></DemoSection>}
     </div>}
     <button className="demo-pill" aria-expanded={open} onClick={() => setOpen(!open)}><span className="demo-dot" />Demo controls <Sim>Demo environment</Sim></button>
@@ -251,7 +251,7 @@ export function ApiDemoControls() {
 }
 
 // The one-time launch reset: an empty marketplace with only the signed-in Super Admin.
-function LaunchDialog({ onClose }) {
+export function LaunchDialog({ onClose }) {
   const { staff, refresh, toast, nav } = useApp(); const [v, setV] = useState({ name: staff.name, password: '', confirm: '' }); const [err, setErr] = useState({}); const [busy, setBusy] = useState(false);
   const s = k => e => setV({ ...v, [k]: e.target.value });
   async function go() {
