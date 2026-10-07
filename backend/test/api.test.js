@@ -409,3 +409,19 @@ test('long lists are capped in /api/state and paged through /api/list with the s
   assert.equal((await req('/api/list/audit', { token: mira })).status, 403); // customers have no audit view
   assert.equal((await req('/api/list/orders', { token: mira })).status, 404);
 });
+
+test('a Super Admin changes a staff sign-in email with their own password; others cannot', async () => {
+  const sa = await login('kwame.sa-02@staff.example.com', true); const fin = await login('priya.fin-02@staff.example.com', true);
+  const dana = (await req('/api/state', { token: sa })).body.view.staff; const id = Object.values(dana).find(s => s.email === 'dana.dsp-01@staff.example.com').id;
+  const change = (token, body) => req(`/api/staff/${id}/email`, { method: 'POST', token, body });
+  assert.equal((await change(fin, { email: 'new.dana@example.org', password: 'test-pass-123' })).status, 403);
+  assert.equal((await change(sa, { email: 'new.dana@example.org', password: 'wrong' })).status, 422);
+  assert.equal((await change(sa, { email: 'mira@example.com', password: 'test-pass-123' })).status, 422); // in use
+  const old = await login('dana.dsp-01@staff.example.com', true);
+  assert.equal((await change(sa, { email: 'New.Dana@Example.org', password: 'test-pass-123' })).status, 200);
+  // The old address no longer signs in, the old session has ended, and the new address works.
+  assert.equal(await login('dana.dsp-01@staff.example.com', true), undefined);
+  assert.equal((await req('/api/state', { token: old })).status, 401);
+  const fresh = await login('new.dana@example.org', true); assert.equal((await req('/api/state', { token: fresh })).body.view.me.email, 'new.dana@example.org');
+  assert.ok((await req('/api/state', { token: sa })).body.view.audit.some(a => a.action === 'Staff email changed' && a.object === id));
+});

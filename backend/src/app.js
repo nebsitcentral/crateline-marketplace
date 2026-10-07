@@ -205,6 +205,31 @@ export function createApp(store, { transport = null, storage = null, payments = 
     res.json({ ok: true, token: sign(req.auth.kind, req.auth.id, tv) });
   }));
 
+  // A staff member's sign-in email is changed by a Super Admin (their own included), who confirms
+  // with their own password. The staff member's sessions end and both addresses are told.
+  app.post('/api/staff/:id/email', authLimiter, auth(), wrap(async (req, res) => {
+    const to = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+    const { doc } = await store.read(); const actor = req.auth.kind === 'staff' && actorFrom(doc, req.auth);
+    if (!actor) throw new DomainError('Staff only.', 'denied');
+    need(doc, actor, 'staff.manage', 'change staff email addresses');
+    const target = doc.staff[req.params.id]; if (!target) throw new DomainError('Staff member not found.', 'not_found');
+    if (!/^\S+@\S+\.\S+$/.test(to) || to.length > 200) throw Object.assign(new DomainError('Enter a valid email address.', 'validation'), { field: 'email' });
+    const mine = await store.findAccount(actor.email);
+    if (!mine || !(await bcrypt.compare(String(req.body?.password || ''), mine.hash))) throw Object.assign(new DomainError('Your password is incorrect.', 'validation'), { field: 'password' });
+    if (to === target.email) throw Object.assign(new DomainError('That is already the email address.', 'validation'), { field: 'email' });
+    if (await store.findAccount(to)) throw Object.assign(new DomainError('An account already uses this email.', 'validation'), { field: 'email' });
+    const { value: tv } = await store.transact(async (d, tx) => {
+      const a = actorFrom(d, req.auth); need(d, a, 'staff.manage', 'change staff email addresses'); const t = d.staff[req.params.id]; const from = t.email;
+      await tx.changeAccountEmail(from, to); t.email = to; t.tokenVersion = (t.tokenVersion || 0) + 1;
+      audit(d, a, 'Staff email changed', t.id, { before: from, after: to, sensitive: true });
+      if (emailEnabled()) { await tx.queueEmail(compose('emailChanged', from, { name: t.name.split(' ')[0], newEmail: to })); await tx.queueEmail(compose('emailChanged', to, { name: t.name.split(' ')[0], newEmail: to })); }
+      return t.tokenVersion;
+    });
+    kick();
+    // Changing your own address keeps you signed in with a fresh token.
+    res.json({ ok: true, ...(target.id === actor.id ? { token: sign('staff', actor.id, tv) } : {}) });
+  }));
+
   // ---------- email verification, password reset and email change (need a working email transport)
   const needEmail = () => { if (!emailEnabled()) throw new DomainError('Email is not set up on this server yet.', 'rejected'); };
   const badLink = () => { throw new DomainError('This link is invalid, already used or expired. Request a new one.', 'rejected'); };
