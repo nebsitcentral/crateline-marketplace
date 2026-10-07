@@ -326,7 +326,7 @@ export function StaffSignIn() {
 
 // API mode: staff sign in with their own email and password; the server checks the account is active.
 function StaffSignInForm() {
-  const { apiSignIn } = useApp();
+  const { apiSignIn, nav } = useApp();
   const [email, setEmail] = useState(''); const [pw, setPw] = useState(''); const [err, setErr] = useState(''); const [busy, setBusy] = useState(false); const [ticket, setTicket] = useState(null);
   async function submit(e) {
     e.preventDefault();
@@ -335,14 +335,16 @@ function StaffSignInForm() {
     try { const r = await apiSignIn(() => api.staffLogin(email.trim(), pw)); if (r?.mfa) { setBusy(false); setTicket(r.ticket); } }
     catch (x) { setBusy(false); setErr(x.status === 401 ? 'Email or password is incorrect. Check the details and try again.' : x.message); }
   }
-  if (ticket) return <div className="wrap page narrow"><h1>Enter your sign-in code</h1><div className="card pad"><MfaCodeStep ticket={ticket} onBack={m => { setTicket(null); setPw(''); setErr(m || ''); }} /></div></div>;
-  return <div className="wrap page narrow"><h1>Staff sign-in</h1>
+  // Same centred card as the customer sign-in page.
+  if (ticket) return <div className="auth-wrap"><div className="auth-card card"><h1>Enter your sign-in code</h1><MfaCodeStep ticket={ticket} onBack={m => { setTicket(null); setPw(''); setErr(m || ''); }} /></div></div>;
+  return <div className="auth-wrap"><div className="auth-card card"><h1>Staff sign-in</h1>
     <p className="muted">Admin and Super Admin panels for marketplace staff. Customers sign in from the main sign-in page.</p>
-    <form className="card pad" onSubmit={submit} noValidate>
+    <form onSubmit={submit} noValidate>
       {err && <Notice tone="bad">{err}</Notice>}
       <Field label="Staff email" required><input type="email" autoComplete="username" value={email} onChange={e => setEmail(e.target.value)} /></Field>
       <Field label="Password" required><input type="password" autoComplete="current-password" value={pw} onChange={e => setPw(e.target.value)} /></Field>
+      <div className="row-between"><span /><a href="#" className="small" onClick={e => { e.preventDefault(); nav({ page: 'forgot' }); }}>Forgot password?</a></div>
       <Btn v="primary" type="submit" className="block" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</Btn>
     </form>
-  </div>;
+  </div></div>;
 }

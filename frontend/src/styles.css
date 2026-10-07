@@ -932,3 +932,6 @@ section.card>.notice{margin:0 26px 16px;padding:13px 16px} section.card>.notice:
 .panel.admin .tb-search{max-width:420px}
 @media(max-width:1179px){.panel.admin .tb-search{display:flex}}
 @media(max-width:900px){.panel.admin .panel-body{display:block}}
+
+/* Sign-in cards: room between the "Forgot password?" link and the button */
+.auth-card form>.row-between{margin:2px 0 16px}

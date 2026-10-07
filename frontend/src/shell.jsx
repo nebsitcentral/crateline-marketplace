@@ -108,7 +108,7 @@ export function PublicHeader() {
 }
 
 export function Footer() {
-  const { nav } = useApp();
+  const { nav, demoEnv } = useApp();
   const L = (label, r) => <li><a href="#" onClick={e => { e.preventDefault(); nav(r); }}>{label}</a></li>;
   return <footer className="footer"><div className="wrap foot-grid">
     <div className="foot-brand"><Logo onClick={() => nav({ page: 'home' })} /><p className="muted small">A marketplace for digital products and services, connecting buyers with verified sellers of data, accounts, infrastructure and managed services.</p>
@@ -116,7 +116,7 @@ export function Footer() {
     <div><h4>Marketplace</h4><ul>{CATEGORIES.filter(c => c.active).map(c => L(c.name, { page: 'search', cat: c.id }))}</ul></div>
     <div><h4>Policies</h4><ul>{L('Terms and Conditions', { page: 'terms' })}{L('Privacy Policy', { page: 'privacy' })}{L('Purchase, delivery and refunds', { page: 'policies' })}</ul></div>
     <div><h4>Support</h4><ul>{L('Help Center', { page: 'help' })}{L('Contact support', { page: 'help', form: true })}{L('Become a seller', { page: 's-onboarding' })}{L('Staff sign-in (Admin panels)', { page: 'staff-signin' })}</ul></div>
-  </div><div className="wrap foot-base muted xs">Interactive prototype. Payments, verification, uploads and payouts are simulated. © 2026 Crateline (fictional brand).</div></footer>;
+  </div><div className="wrap foot-base muted xs">{demoEnv ? 'Interactive prototype. Payments, verification, uploads and payouts are simulated. © 2026 Crateline (fictional brand).' : '© 2026 Crateline. All rights reserved.'}</div></footer>;
 }
 
 // Top navigation. `items` are { id, label, icon, count, group }. The first `primary` links always
