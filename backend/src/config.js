@@ -16,9 +16,11 @@ export const config = {
   allowDemoControls: bool(env.ALLOW_DEMO_CONTROLS, !production),
   // Sign-in and registration attempts per IP address per 15 minutes.
   authRateLimit: Number(env.AUTH_RATE_LIMIT) || 30,
-  // Transactional email. With BREVO_API_KEY set, email is sent through Brevo. Without it, outside
+  // Transactional email. With RESEND_API_KEY set, email is sent through Resend (or through Brevo
+  // with BREVO_API_KEY; Resend wins if both are set). Without a key, outside
   // production, emails are written to the server log ('log') so the flows can be tried locally;
   // in production without a key, email features stay off ('off').
+  resendApiKey: env.RESEND_API_KEY || '',
   brevoApiKey: env.BREVO_API_KEY || '',
   emailFrom: env.EMAIL_FROM || '',
   emailFromName: env.EMAIL_FROM_NAME || 'Crateline',
@@ -38,7 +40,7 @@ export const config = {
   didit: { apiKey: env.DIDIT_API_KEY || '', webhookSecret: env.DIDIT_WEBHOOK_SECRET || '', workflowId: env.DIDIT_WORKFLOW_ID || '' },
   r2: { accountId: env.R2_ACCOUNT_ID || '', accessKeyId: env.R2_ACCESS_KEY_ID || '', secret: env.R2_SECRET_ACCESS_KEY || '', bucket: env.R2_BUCKET || '' },
 };
-config.emailTransport = env.EMAIL_TRANSPORT || (config.brevoApiKey ? 'brevo' : production ? 'off' : 'log');
+config.emailTransport = env.EMAIL_TRANSPORT || (config.resendApiKey ? 'resend' : config.brevoApiKey ? 'brevo' : production ? 'off' : 'log');
 config.fileStorage = env.FILE_STORAGE || (Object.values(config.r2).every(Boolean) ? 'r2' : 'off');
 // 'nowpayments': crypto checkouts are real. 'simulated': every payment method is simulated.
 config.payments = env.PAYMENTS || (config.nowpayments.apiKey && config.nowpayments.ipnSecret ? 'nowpayments' : 'simulated');
@@ -53,6 +55,7 @@ export function assertConfig() {
   if (config.production && !config.databaseUrl) missing.push('DATABASE_URL');
   if (missing.length) throw new Error('Missing required environment variables: ' + missing.join(', '));
   if (config.production && config.jwtSecret.length < 32) throw new Error('JWT_SECRET must be at least 32 characters in production.');
+  if (config.emailTransport === 'resend' && (!config.resendApiKey || !/^\S+@\S+\.\S+$/.test(config.emailFrom))) throw new Error('Resend email needs RESEND_API_KEY and EMAIL_FROM (an address on a domain verified in Resend).');
   if (config.emailTransport === 'brevo' && (!config.brevoApiKey || !/^\S+@\S+\.\S+$/.test(config.emailFrom))) throw new Error('Brevo email needs BREVO_API_KEY and EMAIL_FROM (a sender address verified in Brevo).');
   if (config.payments === 'nowpayments' && !(config.nowpayments.apiKey && config.nowpayments.ipnSecret)) throw new Error('NOWPayments needs NOWPAYMENTS_API_KEY and NOWPAYMENTS_IPN_SECRET.');
   if (config.kyc === 'didit' && !Object.values(config.didit).every(Boolean)) throw new Error('Didit needs DIDIT_API_KEY, DIDIT_WEBHOOK_SECRET and DIDIT_WORKFLOW_ID.');

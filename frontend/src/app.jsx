@@ -128,7 +128,7 @@ function App() {
     } catch (e) { setApiStatus(e.message || 'The server could not be reached.'); }
   }, []);
   useEffect(() => { if (apiEnabled) refresh(); }, []);
-  // API mode: how the server sends email ('brevo', 'log' for development, or 'off').
+  // API mode: how the server sends email ('resend' or 'brevo', 'log' for development, or 'off').
   const [emailMode, setEmailMode] = useState(apiEnabled ? null : 'demo');
   // API mode: 'r2' when the server stores files; otherwise attachments stay simulated.
   const [fileMode, setFileMode] = useState(apiEnabled ? 'off' : 'demo');

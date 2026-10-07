@@ -122,7 +122,8 @@ Super Admins time travel, provider outcomes (`/api/demo/scenario`) and reset whi
    only collections still found in the document. A transaction that repeats a record id is refused.
    Still to do: each write locks one row and loads the (cached) document, and reads are built from
    that document rather than per-table queries.
-2. Real email. **Done:** Brevo (`backend/src/email.js`). Emails are queued in `email_outbox` in the
+2. Real email. **Done:** Resend, chosen 2026-10-07 (`RESEND_API_KEY`), with Brevo kept as an
+   alternative transport (`BREVO_API_KEY`); both in `backend/src/email.js`. Emails are queued in `email_outbox` in the
    same transaction as the change that causes them and sent by a worker (every 15 s, plus right
    after a request) with backoff retries; Postgres claims rows with `FOR UPDATE SKIP LOCKED`.
    Verification (on registration, resend), password reset (30-minute single-use link, ends all

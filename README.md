@@ -17,7 +17,7 @@ Seller panel, and Admin and Super Admin management panels.
   permission checks, role-filtered data, and the money, refund, payout, dispute and moderation
   transitions. Covered by tests (`npm test`).
 * **Connected:** with `VITE_API_URL` set, every screen reads and writes through the API. Email
-  (Brevo), two-factor sign-in and file storage (Cloudflare R2) are real once their keys are set.
+  (Resend or Brevo), two-factor sign-in and file storage (Cloudflare R2) are real once their keys are set.
 * **Crypto payments:** real through NOWPayments once its keys are set (see below).
 * **Seller identity checks:** real through Didit once its keys are set (see below).
 * **Crypto payouts:** real through NOWPayments once its sign-in details are set (see below).
@@ -66,8 +66,8 @@ Demo logins seeded in the API all use the password in `SEED_DEMO_PASSWORD`, for 
    * `SEED_DEMO_PASSWORD` = the password for the seeded demo accounts
    * `FRONTEND_ORIGIN` = your GitHub Pages origin, e.g. `https://yourname.github.io`
    * `SIMULATE_PROVIDERS=true` and `ALLOW_DEMO_CONTROLS=true` while this is a demo
-   * Email through Brevo: `BREVO_API_KEY` (Brevo > SMTP & API > API keys), `EMAIL_FROM` (a sender
-     or domain verified in Brevo), optional `EMAIL_FROM_NAME`, and `APP_URL` = the website address
+   * Email through Resend: `RESEND_API_KEY` (Resend > API Keys), `EMAIL_FROM` (an address on a
+     domain verified in Resend; `BREVO_API_KEY` works instead for Brevo), optional `EMAIL_FROM_NAME`, and `APP_URL` = the website address
      used in email links, e.g. `https://yourname.github.io/<repo-name>`. Without a key, production
      keeps verification, password reset and email change switched off.
    * `DATA_ENCRYPTION_KEY` = a long random string that encrypts two-factor secrets. Keep it

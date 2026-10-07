@@ -24,6 +24,25 @@ export function brevoTransport({ apiKey = config.brevoApiKey, from = config.emai
     },
   };
 }
+// Resend (https://resend.com). The sender's domain must be verified in Resend.
+export function resendTransport({ apiKey = config.resendApiKey, from = config.emailFrom, fromName = config.emailFromName, fetchImpl = fetch } = {}) {
+  return {
+    name: 'resend',
+    async send(msg) {
+      let res;
+      try {
+        res = await fetchImpl('https://api.resend.com/emails', {
+          method: 'POST', headers: { authorization: 'Bearer ' + apiKey, 'content-type': 'application/json' },
+          body: JSON.stringify({ from: `${fromName} <${from}>`, to: [msg.to], subject: msg.subject, html: msg.html, text: msg.text, tags: [{ name: 'template', value: String(msg.template).replace(/[^\w-]/g, '_') }] }),
+        });
+      } catch (e) { throw Object.assign(new Error('Could not reach Resend: ' + e.message), { permanent: false }); }
+      if (res.ok) { const body = await res.json().catch(() => ({})); return { providerId: body.id || null }; }
+      const detail = await res.text().catch(() => '');
+      // A request Resend calls invalid (400, 422) cannot succeed on retry; auth, rate-limit and server errors can.
+      throw Object.assign(new Error(`Resend refused the email (${res.status}): ${detail.slice(0, 300)}`), { permanent: res.status === 400 || res.status === 422 });
+    },
+  };
+}
 export function logTransport(log = console.log) {
   return { name: 'log', async send(msg) { log(`\n[email:${msg.template}] to ${msg.to}\nSubject: ${msg.subject}\n${msg.text}\n`); return { providerId: null }; } };
 }
@@ -33,6 +52,7 @@ export function memoryTransport() {
   return t;
 }
 export function createTransport() {
+  if (config.emailTransport === 'resend') return resendTransport();
   if (config.emailTransport === 'brevo') return brevoTransport();
   if (config.emailTransport === 'log') return logTransport();
   return null;

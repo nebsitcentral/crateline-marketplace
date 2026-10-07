@@ -8,7 +8,7 @@ const { createStore } = await import('../src/store.js');
 const { seedStore } = await import('../src/seed.js');
 const { createApp } = await import('../src/app.js');
 const { migrate } = await import('../src/migrate.js');
-const { memoryTransport, brevoTransport, processOutbox, BACKOFF_MS, compose } = await import('../src/email.js');
+const { memoryTransport, brevoTransport, resendTransport, processOutbox, BACKOFF_MS, compose } = await import('../src/email.js');
 
 let server, base, store; const transport = memoryTransport();
 before(async () => { if (process.env.DATABASE_URL) await migrate(); store = createStore(); await store.init(); await seedStore(store, { force: true }); server = createApp(store, { transport }).listen(0); base = `http://127.0.0.1:${server.address().port}`; });
@@ -113,6 +113,20 @@ test('outbox retries with backoff and stops after the last attempt; permanent er
   // a later success is delivered normally
   await queue('fine@example.com'); const ok = memoryTransport();
   assert.deepEqual(await processOutbox(store, ok), { sent: 1, failed: 0 }); assert.equal(ok.sent[0].to, 'fine@example.com');
+});
+
+test('Resend transport sends the documented request and classifies failures', async () => {
+  const calls = []; const fetchImpl = async (url, init) => { calls.push({ url, init }); return { ok: true, json: async () => ({ id: 'e-123' }) }; };
+  const t = resendTransport({ apiKey: 're_test', from: 'no-reply@shop.example.com', fromName: 'Crateline', fetchImpl });
+  const r = await t.send({ to: 'a@x.com', template: 'verify', subject: 'Hi', html: '<p>h</p>', text: 't' });
+  assert.equal(r.providerId, 'e-123');
+  assert.equal(calls[0].url, 'https://api.resend.com/emails'); assert.equal(calls[0].init.headers.authorization, 'Bearer re_test');
+  assert.deepEqual(JSON.parse(calls[0].init.body), { from: 'Crateline <no-reply@shop.example.com>', to: ['a@x.com'], subject: 'Hi', html: '<p>h</p>', text: 't', tags: [{ name: 'template', value: 'verify' }] });
+  const fail = status => resendTransport({ apiKey: 'k', from: 'f@x.com', fetchImpl: async () => ({ ok: false, status, text: async () => 'nope' }) }).send({ to: 'a@x.com', template: 't', subject: 's', html: 'h', text: 't' });
+  await assert.rejects(fail(422), e => e.permanent === true);
+  await assert.rejects(fail(429), e => e.permanent === false);
+  await assert.rejects(fail(500), e => e.permanent === false);
+  await assert.rejects(resendTransport({ apiKey: 'k', from: 'f@x.com', fetchImpl: async () => { throw new Error('down'); } }).send({ to: 'a@x.com', template: 't', subject: 's', html: 'h', text: 't' }), e => e.permanent === false);
 });
 
 test('Brevo transport sends the documented request and classifies failures', async () => {
