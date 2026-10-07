@@ -1,7 +1,7 @@
 import React from 'react';
 import { now } from '@crateline/domain/clock.js';
 import { SERVICE_FEE, TERMS_VERSION, round2, D, activeCats } from '@crateline/domain/data.js';
-import { currentTerms, startPayment, activeRestriction, money, fmtN, fmtDate, fmtDT, rel, days, isPublic, buyerGroup, isOverdue, openCase, deliveredQty, STATUS_LABEL, newId, completePurchase, notify, refreshOfferExpiry } from '@crateline/domain/logic.js';
+import { currentTerms, startPayment, activeRestriction, money, fmtN, fmtDate, fmtDT, rel, days, isPublic, buyerGroup, isOverdue, openCase, deliveredQty, STATUS_LABEL, newId, completePurchase, notify, refreshOfferExpiry, storeStats } from '@crateline/domain/logic.js';
 import { Icon, Btn, Badge, Avatar, Stars, StarInput, ProductArt, Modal, Confirm, Empty, ErrorState, Field, Notice, Sim, Seg, Tabs, Progress, Timeline, FileChip, FilePicker, NotificationList, Table, Stat, Section, KV, StatusBadge, Stepper, CASE_TONE, useApp } from './ui.jsx';
 import { PageHead, SearchBox } from './shell.jsx';
 import * as A from '@crateline/domain/actions.js';
@@ -19,6 +19,8 @@ export function UOverview() {
   const pending = db.purchases.filter(p => p.buyerId === me.id && p.status === 'Pending');
   const notes = db.notifications.filter(n => n.userId === me.id && n.panel === 'buyer').slice(0, 5);
   const fresh = db.listings.filter(l => isPublic(db, l)).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  // Active stores with something to buy, busiest first; the buyer's own store is left out.
+  const stores = Object.values(db.stores).filter(s => s.status === 'Active' && s.id !== me.storeId).map(s => ({ s, ss: storeStats(db, s) })).filter(x => x.ss.active > 0).sort((a, b) => b.ss.completed - a.ss.completed || a.s.name.localeCompare(b.s.name));
   return <>
     <div className="dash-top">
       <section className="discover" aria-labelledby="dash-h">
@@ -43,6 +45,12 @@ export function UOverview() {
     </div>
     {pending.map(p => <Notice key={p.id} tone="warn" title={`Payment ${p.id} is pending`} action={<Btn size="sm" onClick={() => nav({ page: 'pay-result', id: p.id })}>View status</Btn>}>Orders are created once the provider confirms payment.</Notice>)}
     {awaiting.map(o => <Notice key={o.id} tone="accent" title={`${o.id} was delivered`} action={<Btn size="sm" v="primary" onClick={() => nav({ page: 'u-order', id: o.id })}>Review delivery</Btn>}>{o.snap.title}. Confirm receipt, request a replacement, or report a problem.</Notice>)}
+    {stores.length > 0 && <Section title="Stores" action={<button className="linkbtn" onClick={() => nav({ page: 'search' })}>Browse all products</button>}>
+      <div className="follow-grid">{stores.slice(0, 8).map(({ s, ss }) => <button key={s.id} className="store-tile" onClick={() => nav({ page: 'store', id: s.id })}>
+        <span className="row-gap"><Avatar name={s.name} hue={s.hue} size={44} square /><span className="st-main"><b>{s.name}</b><span className="muted xs">{s.tagline}</span></span></span>
+        <span className="row-gap small"><Stars value={ss.rating} count={ss.count} small /><span className="muted">· {ss.active} product{ss.active === 1 ? '' : 's'} · {fmtN(ss.completed)} completed order{ss.completed === 1 ? '' : 's'}</span></span>
+        {me.following.includes(s.id) && <Badge tone="muted">Following</Badge>}</button>)}</div>
+    </Section>}
     {!mine.length ? <Empty icon="cart" title="No purchases yet" action={<Btn v="primary" onClick={() => nav({ page: 'home' })}>Browse products</Btn>}>Orders you place appear here with delivery status and files.</Empty> :
       <div className="two-col">
         <Section title="Recent purchases" action={<button className="linkbtn" onClick={() => nav({ page: 'u-orders' })}>All orders</button>}>
